@@ -625,11 +625,8 @@ function applyTheme() {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyTheme(); applyControls(); });
 applyTheme();
 
-// starting selection: warm salty box plus a thermocline-like curve
-panel.setSelections([
-  { kind: 'rect', pair: 'ts', s0: 0.8, s1: 1, t0: 0.55, t1: 1 },
-  { kind: 'curve', pair: 'ts', points: [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]] },
-]);
+// start with no selections (this also sends the empty selection state to the shader and draws the empty list)
+panel.setSelections([]);
 applyControls();
 if (cur.ds.steps.length > 1) preloadRest(loadToken); else status.textContent = HELP;
 render(performance.now());
