@@ -11,8 +11,10 @@ whose selections (rectangles and a curve) extract fiber surfaces in the 3D volum
 
 ## Regenerating the data
 
-`public/data` is already included. To rebuild it from the WOA23 annual 1-degree NetCDF files:
+`public/data` (annual temperature and salinity, time span not recorded) is what the app reads today.
+The new multi-field, annual + monthly pipeline (temperature, salinity, oxygen, 1971-2000) writes to
+`public/data/woa23` and is not wired into the app yet. See `log.md` for the decisions.
 
-    python tools/prep.py t_an.nc s_an.nc public/data
-
-Requires numpy, scipy and netCDF4.
+    pip install numpy scipy netCDF4
+    python tools/download.py data/raw        # 39 NetCDF files from NCEI, > 1 GB
+    python tools/prep.py data/raw public/data/woa23

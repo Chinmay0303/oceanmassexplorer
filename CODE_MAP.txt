@@ -19,6 +19,11 @@ File: tools/prep.py  (62 lines)
  Output: public/data/{t.bin 13MB, s.bin 13MB, mask.bin 6.6MB, meta.json}
    meta: 360x180x102 grid (1 deg, 102 depth levels 0-5500 m), lat0=-89.5, lon0=-179.5,
          T range [-3,31] C, S range [5,41] PSU.
+ 1.5 NEW (not yet used by the app) tools/download.py  fetches 39 WOA23 NetCDF files (t,s,o x annual+12 months, span decav71A0).
+ 1.6 NEW tools/prep.py (replaces the old script above)  global per-field ranges, nearest-fill per field, writes
+                                public/data/woa23/{meta.json, annual/00.bin, monthly/01..12.bin + .mask.bin}. See log.md.
+ NOTE: lines 1.1-1.4 describe the OLD prep.py (t,s annual only); the current prep.py is the new one. The app still
+ reads the old public/data/{t,s,mask}.bin + meta.json until the frontend is migrated.
  Proposal map: [Dataset] WOA23 temperature + salinity on lat/lon/depth grid. DONE (annual 1-deg only).
  Note: no other WOA fields (oxygen, nutrients, ...), no seasonal/monthly, no 0.25-deg.
 
