@@ -317,3 +317,15 @@ PART 16. ALL DIAGRAMS AT ONCE (step 5 of D23)
  16.5 ts.js PAIRS.index, PAIR_KEYS, surfaceRects, volumeRectsOf(pair), curves, regionTF(pair)   what the 3D view draws (all diagrams).
  16.6 main.js tf2/sdfTex arrays, sdfKeys, sdfCache, uploadSelection()   uploads region layers, changed curve layers (cached) and the rectangle/curve uniforms.
  Replaces 3.7-3.9 and the single-curve parts of 6.10/6.11/7.2.
+
+=================================================================================
+PART 17. PICKING (step 6)
+=================================================================================
+ 17.1 shaders.js pickOut(), uPick/uPickNdc, pack16()   picking pass: first ocean sample (or slice plane) under the cursor -> 4 pixels.
+ 17.2 main.js pickFbo, pickRaw(), pickAt()             draws the pass into a 4x1 RGBA8 framebuffer, reads it back, decodes it.
+ 17.3 main.js pointerdown/pointerup                    a click (left button, < 4 px movement, no Shift) calls pickAt().
+ 17.4 main.js showProbe()/clearProbe()/updatePin()     readout text (#readout), selections containing the point, pin (#pin) projected from the camera
+                                                       each frame, panel.setProbe(). Cleared by Esc, empty click, dataset or month change.
+ 17.5 ts.js probe / setProbe()                         ring + cross drawn in the active diagram at the picked point.
+ 17.6 data.js dlon                                     grid step in longitude, needed for the lat/lon readout.
+ Interaction map addition: click in 3D -> 17.3 -> 17.2 (L4) -> shader pass (L5) -> 17.4 -> diagram marker (L2/L3).
