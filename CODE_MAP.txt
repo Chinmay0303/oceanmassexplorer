@@ -255,3 +255,24 @@ PART 12. CHANGES AFTER THE FIRST MAP (dataset selector)  -- line numbers in Part
  12.9 ts.js setData()         swap histogram for another step; ranges from meta.ranges; mask & 1.               (5.x)
  Interaction map (Part 10) additions: Dataset select / Month slider -> main.js 12.5 -> cur + showStep -> uploadVolume (L4)
  + panel.setData (L3) -> same shader path. Nothing else in the interaction chain changed.
+
+=================================================================================
+PART 13. CHANGES AFTER PART 12 (preload, playback, diagram pairs)  -- names are stable, line numbers are not
+=================================================================================
+ 13.1 main.js makeVolume()/resetVolumes()/addStep()   one GPU texture + histograms per time step in cur.tex[] / cur.hists[];
+                              replaces the single-texture upload of 12.4. Uploads use texture unit 7.
+ 13.2 main.js selectDataset() / preloadRest() / setStep()   switch dataset (first step shown at once, others load in the
+                              background, status shows progress); setStep = instant switch to a loaded month. Replaces showStep (12.5).
+ 13.3 main.js anim / setPlaying() / Space key          playback state (pos = fractional step), Play button, Space shortcut.
+ 13.4 main.js render()        advances anim.pos by dt*speed, wraps/stops, picks textures A (floor) and B (next) + uBlend,
+                              half resolution while playing; binds units 0 and 5.
+ 13.5 index.html              "Data" group: play row (Play, speed, blend, loop); "Water-mass diagram" heading + Diagram select.
+ 13.6 shaders.js              vol(tc) = texture(uVol) or mix with uVolB by uBlend; all volume reads go through it.
+                              sampleST() builds (x, y) from uPair channels (T-S, T-O2, S-O2).
+ 13.7 ts.js                   PAIRS, buildHists() (all pair histograms in one pass), TSPanel with per-pair selections
+                              (rects/curve are accessors for the active pair), setHists(), setPair(), getSelections()/setSelections(),
+                              nice axis ticks, axis labels from the pair. (Replaces 5.2/5.3 structure; 5.5-5.9 behave the same on the active pair.)
+ 13.8 main.js uploadSelection()  now also sets uPair for the active pair.
+ 13.9 main.js save/load       saves pair + selections of all pairs + dataset/step; loads old rects/curve as T-S.
+ Interaction map additions: Play/Pause/Space/speed/blend/loop -> 13.3 -> render() 13.4 -> uBlend, textures A/B -> vol() in shader;
+ Diagram select -> panel.setPair -> uploadSelection (uPair, region texture, SDF) -> sampleST in shader.

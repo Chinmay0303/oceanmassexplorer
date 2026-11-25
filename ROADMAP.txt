@@ -1,5 +1,10 @@
 OCEAN WATER MASS EXPLORER - IMPROVEMENT ROADMAP (feasibility, priority, affected code)
 =================================================================================
+STATUS (2026-11-25): item F (time animation) is built for annual + monthly (no seasonal); item D (more fields) is built for T, S, O2
+with the three diagrams T-S, T-O2, S-O2 (1D transfer function on all three fields); selections are per diagram, no cross-pair combination yet.
+Still open: everything else below (fiber quality, colour map/legend, delete single selections, multiple curves, picking, performance, hygiene).
+Details and decisions: log.md (D16-D21).
+
 Section IDs (3.5, 5.6, 6.10 ...) refer to CODE_MAP.txt.  Effort: S < 1 day, M 1-3 days, L > 3 days (one person).
 Feasibility: all items below are doable in the current WebGL2 + vanilla JS stack. Risks are noted per item.
 

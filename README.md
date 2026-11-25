@@ -9,6 +9,14 @@ whose selections (rectangles and a curve) extract fiber surfaces in the 3D volum
     npm run dev        # development server
     npm run build      # static site in dist/, can be hosted anywhere
 
+## Using the app
+
+- **Data**: choose Annual (0-5500 m) or Monthly (0-1500 m). Monthly loads all 12 months first (about 0.4 GB of GPU memory),
+  then the month slider, Play/Pause (also Space), speed, month blending and looping become available.
+- **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen, then drag to draw a rectangle
+  (region) or a curve (fiber surface). Every diagram keeps its own selections; the 3D view shows the chosen diagram's.
+- **Volume**: 1D transfer function mode can colour by temperature, salinity or oxygen.
+
 ## Getting the data (WOA23: temperature, salinity, oxygen; annual + monthly)
 
 The app reads `public/data/woa23/`. The `.bin` files (341 MB) are not in git; `meta.json` is.
