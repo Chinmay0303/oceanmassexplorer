@@ -80,7 +80,7 @@ Rendering = one full-screen triangle + one fragment shader that ray-marches 3D t
 5. CAMERA AND MOUSE/KEYBOARD  (src/main.js L148-L236)                      [P1]
 ---------------------------------------------------------------------------------
  5.1 Orbit camera           L148-L172  cam {az, el, dist, target}, HOME, basis(), clampTarget(), pan().
- 5.2 Pointer                L174-L201  left drag orbit, right / middle / Shift drag pan, dblclick reset, contextmenu off;
+ 5.2 Pointer                L174-L201  left drag orbit, right / middle / Shift drag pan, contextmenu off; resetView() (Reset button or Home key, no double-click);
                                       pointerdown records downAt, pointerup treats a small left click as a pick (Part 10).
  5.3 Zoom to cursor         L203-L219  wheel, normalises deltaMode.
  5.4 Keys                   L220-L236  WASD / arrows / R F / Q E via moveByKeys(); ignored while typing; set cleared on blur.
@@ -168,7 +168,7 @@ Rendering = one full-screen triangle + one fragment shader that ray-marches 3D t
                              render scale, canvas resize, camera uniforms, bind volume A / B + uBlend, draw. Skips drawing when not dirty.
  12.2 Vector helpers L522-L523 cross(), norm() (+ dot3() in Part 10).
  12.3 applyTheme() L613      GL background / land / edge colours, diagram recolour; media-query listener re-applies controls.
- 12.4 Startup L624-L631      default selection (red T-S rectangle + curve), applyControls(), preload of months, first render.
+ 12.4 Startup L624-L631      starts with no selections (setSelections([])), applyControls(), preload of months, first render.
 
 ---------------------------------------------------------------------------------
 13. DOCS / PROJECT HYGIENE
@@ -190,6 +190,7 @@ PROPOSAL COVERAGE
  P8 Save / load configuration .................. DONE   Part 8.5
  N1 Fiber surfaces + regions in one renderer ... DONE
  Extras: annual + monthly data with animation, oxygen, slice mode, ocean context body, picking with linked diagram marker, quality setting, legends, themes.
+ The app opens with no selections; the user draws them.
 
 ---------------------------------------------------------------------------------
 INTERACTION MAP - ABSTRACTION LEVELS (high -> low)
@@ -199,7 +200,7 @@ INTERACTION MAP - ABSTRACTION LEVELS (high -> low)
 
  Action                      L1 widget                  L2 handler                       L3 state                  L4 upload                    L5 shader
  Rotate / pan / zoom / keys  GL canvas                  5.2-5.4                          cam                       render() camera uniforms     march / slice
- Reset view                  dblclick, #reset           5.2, 8.5                         cam = HOME                render()                     -
+ Reset view                  #reset, Home key           5.2 resetView, 10.4 key handler  cam = HOME                render()                     -
  Pick a point                click on GL canvas         5.2 -> pickAt (10.2)             probe                     pick pass, readout, pin      pickOut
  Choose diagram              #pair                      8.3 -> panel.setPair             panel.pairKey             -                            -
  Draw rectangle / curve      #ts + Rectangle / Curve    ts.js down / move / up           panel.items               uploadSelection (8.2)        rect / curve surfaces, volumes
