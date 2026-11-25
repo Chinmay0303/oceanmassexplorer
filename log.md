@@ -85,6 +85,7 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
   an explicit `?data=bad/` shows "Could not load ocean data: …/meta.json: not JSON (file missing?)".
   Not covered: a real GPU (frame rate, 0.4 GB monthly memory), other browsers, phones, light/dark theme switch, the Drive/CORS hosting path.
   No automated test suite exists yet; these checks were ad-hoc Playwright scripts kept outside the repo.
+- **2026-11-25** User ran download + prep locally (outputs identical to the cloud run), uploaded `woa23.zip` to Drive and shared the link (see Open questions). README rewritten to a minimal setup guide (clone, checkout branch, npm install, download zip, unzip into `public/data`, check `meta.json`, `npm run dev`); the data-building instructions were removed from the README and live only here and in the tool scripts.
 
 ## Data run status
 
@@ -105,7 +106,7 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 
 ## Open questions / TODO
 
-- Upload the `woa23` data to Google Drive and put the shared link in README + here (the cloud session cannot upload to Drive; use the tar.gz or run prep locally). The app will need a configurable data base URL (Drive links do not allow direct CORS fetches, so we may need a direct-download host, e.g. GitHub release assets, for the deployed app; Drive is fine for the team to fetch files into `public/data/woa23` by hand).
+- DONE: `woa23.zip` (the `woa23` folder, built and checked locally by the user: 13 steps, oxygen coverage 1.000, annual + monthly + animation work) is on Google Drive: https://drive.google.com/file/d/1OTczr9tlrDxFRFFEb6hOi05PDWdETCT9/view?usp=drivesdk . Browsers cannot fetch a Drive link directly as data (no CORS, large-file confirm page), so teammates download the zip and unzip it into `public/data/` (steps in README). A deployed app would still need a CORS-enabled host (`?data=`).
 - Should the global ranges be clipped (e.g. to 99.99th percentile) to use the T-S/T-O axes better? Coastal extremes (T 36, S 44, O₂ 722) stretch them; the 256-bin histogram resolution is ~0.15 °C in T.
 - Oxygen units µmol/kg confirmed; put them on the axis label.
 - Frontend status: dataset selector, month slider, oxygen field, preload, play/pause with blending, diagram selector (T–S / T–O₂ / S–O₂) are DONE.

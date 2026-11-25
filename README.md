@@ -1,13 +1,43 @@
 # Ocean Water Mass Explorer
 
-WebGL2 volume renderer for World Ocean Atlas 2023 temperature and salinity, with a T-S diagram
-whose selections (rectangles and a curve) extract fiber surfaces in the 3D volume.
+WebGL2 volume renderer for World Ocean Atlas 2023 temperature, salinity and dissolved oxygen (annual and monthly),
+with a water-mass diagram (T-S, T-O2, S-O2) whose selections (rectangles and curves) extract fiber surfaces in the 3D volume.
 
-## Run
+## Setup
 
-    npm install
-    npm run dev        # development server
-    npm run build      # static site in dist/, can be hosted anywhere
+Needs Git and Node.js 20.19 or newer.
+
+1. Clone the repo and switch to the working branch:
+
+       git clone https://github.com/Chinmay0303/oceanmassexplorer.git
+       cd oceanmassexplorer
+       git checkout claude/amazing-tesla-1jshar
+
+2. Install the dependencies:
+
+       npm install
+
+3. Download the data (341 MB unpacked) from Google Drive and save `woa23.zip` in your downloads directory:
+   https://drive.google.com/file/d/1OTczr9tlrDxFRFFEb6hOi05PDWdETCT9/view?usp=drivesdk
+   (for a large file Drive shows a virus-scan page: click "Download anyway")
+
+4. Unzip it into `public/data/` (replace `<downloads-directory>` with the folder the zip was saved to):
+
+       cd public/data
+       unzip <downloads-directory>/woa23.zip
+       cd ../..
+
+   On Windows use right-click, Extract All, and choose the `public\data` folder. If `unzip` is missing on Linux: `sudo apt install unzip`.
+
+5. Check that this file exists (the folder must not be nested twice):
+
+       ls public/data/woa23/meta.json
+
+6. Start the app and open the address it prints (usually http://localhost:5173):
+
+       npm run dev
+
+If the data is missing, the app falls back to the old annual temperature/salinity files and shows "Annual (legacy)".
 
 ## Using the app
 
@@ -16,28 +46,9 @@ whose selections (rectangles and a curve) extract fiber surfaces in the 3D volum
 - **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen, then drag to draw a rectangle
   (region) or a curve (fiber surface). Every diagram keeps its own selections; the 3D view shows the chosen diagram's.
 - **Volume**: 1D transfer function mode can colour by temperature, salinity or oxygen.
+- Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.
 
-## Getting the data (WOA23: temperature, salinity, oxygen; annual + monthly)
+## More
 
-The app reads `public/data/woa23/`. The `.bin` files (341 MB) are not in git; `meta.json` is.
-
-**One person (once): build the data**
-
-1. Install Python 3.10+ and clone the repo.
-2. `pip install numpy scipy netCDF4`
-3. `python tools/download.py data/raw`   (39 files, about 1.5 GB, safe to re-run; skips finished files)
-4. `python tools/prep.py data/raw public/data/woa23`   (about 30 s)
-5. Check `public/data/woa23` has this exact content:
-   - `meta.json`
-   - `annual/00.bin` (39,657,600 bytes) and `annual/00.mask.bin` (6,609,600 bytes)
-   - `monthly/01.bin` ... `12.bin` (22,161,600 bytes each) and `01.mask.bin` ... `12.mask.bin` (3,693,600 bytes each)
-6. Zip the `woa23` folder (so the zip contains the folder `woa23/` at its top), upload to Google Drive,
-   set sharing to "Anyone with the link: Viewer", and paste the link into `log.md`.
-
-**Everyone else: use the data**
-
-1. Download the zip from the Drive link, unzip it into `public/data/` so that `public/data/woa23/meta.json` exists.
-2. `npm install` then `npm run dev`. The app picks up `woa23` automatically; if it is missing it falls back to the old annual files in `public/data/`.
-
-A Drive link cannot be used directly as a web data source (no CORS headers, and a confirmation page for large files),
-so the data must be unzipped next to the app or hosted on a CORS-enabled host and passed as `?data=<base url>/`.
+`log.md` has the decisions and history (including how the data was built with `tools/download.py` and `tools/prep.py`),
+`CODE_MAP.txt` shows where everything is in the code, `ROADMAP.txt` the planned improvements.
