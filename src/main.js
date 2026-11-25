@@ -244,6 +244,7 @@ function uploadSelection() {
     sdfKey = key;
   }
   gl.uniform2i(U.uPair, panel.pair.x, panel.pair.y);
+  gl.uniform3fv(U.uFiberColor, (panel.curveItem?.color ?? CURVE_RGB).map((c) => c / 255));
   gl.uniform1i(U.uNCurve, n);
   const rects = panel.rects.slice(0, MAX_RECTS);
   const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3);
@@ -403,6 +404,17 @@ $('save').onclick = () => {
 };
 $('load').onclick = () => $('file').click();
 $('reset').onclick = () => { Object.assign(cam, structuredClone(HOME)); interact(); };
+// selections as a flat list; older configs had rects/curve (T-S only) or one {rects, curve} set per diagram
+function migrateSelections(s) {
+  if (Array.isArray(s.selections)) return s.selections;
+  const per = s.selections ?? { ts: { rects: s.rects, curve: s.curve } };
+  const out = [];
+  for (const [pair, v] of Object.entries(per)) {
+    for (const r of v?.rects ?? []) out.push({ kind: 'rect', pair, ...r });
+    if (v?.curve?.length > 1) out.push({ kind: 'curve', pair, points: v.curve });
+  }
+  return out;
+}
 $('file').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -420,8 +432,7 @@ $('file').onchange = async (e) => {
     const pk = PAIRS[s.pair] && !$('pair').querySelector(`option[value=${s.pair}]`).disabled ? s.pair : 'ts';
     $('pair').value = pk;
     panel.setPair(pk);
-    // configs saved before the pair selector only have rects/curve (T-S)
-    panel.setSelections(s.selections ?? { ts: { rects: s.rects ?? [], curve: s.curve ?? [] } });
+    panel.setSelections(migrateSelections(s));
   } catch (err) {
     alert('Could not load configuration: ' + err.message);
   }
@@ -484,7 +495,10 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { ap
 applyTheme();
 
 // starting selection: warm salty box plus a thermocline-like curve
-panel.setSelection([{ s0: 0.8, s1: 1, t0: 0.55, t1: 1, color: [214, 48, 49] }], [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]]);
+panel.setSelections([
+  { kind: 'rect', pair: 'ts', s0: 0.8, s1: 1, t0: 0.55, t1: 1 },
+  { kind: 'curve', pair: 'ts', points: [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]] },
+]);
 applyControls();
 if (cur.ds.steps.length > 1) preloadRest(loadToken); else status.textContent = HELP;
 render(performance.now());

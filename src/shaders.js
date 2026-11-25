@@ -7,7 +7,8 @@ void main() {
 }`;
 
 export const MAX_CURVE = 64;
-export const MAX_RECTS = 8;
+export const MAX_RECTS = 8;     // rectangles in total, across all diagrams
+export const MAX_CURVES = 4;    // curves in total, across all diagrams
 
 // World box: x = lon in [-1,1], z = lat in [-0.5,0.5] (north = -z), y = depth in [-d,d] (surface = +d).
 // Texture coords: (u, v, w) = (lon, lat, depth level index), all in [0,1].

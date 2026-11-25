@@ -1,10 +1,12 @@
-import { MAX_CURVE, MAX_RECTS } from './shaders.js';
-import { themeColors, CURVE_RGB } from './theme.js';
+import { MAX_CURVE, MAX_CURVES, MAX_RECTS } from './shaders.js';
+import { themeColors } from './theme.js';
 import { colorAt, mapName } from './colormaps.js';
 
 const BINS = 256;
-// categorical colours, none of them blue (the palette blues are the ocean) or the curve's green
-export const RECT_COLORS = [[214, 48, 49], [230, 126, 34], [142, 68, 173], [233, 30, 140], [241, 196, 15], [121, 85, 72], [0, 150, 136], [90, 90, 90]];
+// One global palette for all selections (none of them blue: the blues are the ocean). A new selection gets the
+// first colour not used by an existing one (least used when all are taken), so colours are not repeated across
+// diagrams and a deleted selection frees its colour.
+export const PALETTE = [[214, 48, 49], [124, 181, 24], [230, 126, 34], [142, 68, 173], [233, 30, 140], [241, 196, 15], [0, 150, 136], [121, 85, 72], [90, 90, 90], [255, 138, 128]];
 const rgb = (c) => `rgb(${c})`;
 const M = { l: 50, r: 10, t: 10, b: 40 }; // plot margins in px
 const STRIP = 5;                          // width of the colour strips along the axes
@@ -58,7 +60,9 @@ export class TSPanel {
     this.onChange = onChange;
     this.tool = 'rect';
     this.pairKey = 'ts';
-    this.sel = Object.fromEntries(Object.keys(PAIRS).map((k) => [k, { rects: [], curve: [] }]));
+    this.items = [];
+    this.nextId = 1;
+    this.selectedId = null;
     this.showCurve = true;
     this.showRects = true;
     this.drag = null;
@@ -74,12 +78,38 @@ export class TSPanel {
     new ResizeObserver(() => this.resize()).observe(canvas);
   }
 
-  // selections of the active pair (the 3D view shows these)
-  get rects() { return this.sel[this.pairKey].rects; }
-  set rects(v) { this.sel[this.pairKey].rects = v; }
-  get curve() { return this.sel[this.pairKey].curve; }
-  set curve(v) { this.sel[this.pairKey].curve = v; }
+  // ---- selections: one flat list of items { id, kind: 'rect' | 'curve', pair, name, color, visible, style, ... } ----
+  // rect: s0, s1 (x range) and t0, t1 (y range) in normalised coordinates; curve: points [[x, y], ...].
+  // The diagram shows the items of the active pair; `rects` / `curve` are what the 3D view draws at the moment.
   get pair() { return PAIRS[this.pairKey]; }
+  get rects() { return this.items.filter((i) => i.kind === 'rect' && i.pair === this.pairKey); }
+  get curveItem() { return this.items.find((i) => i.kind === 'curve' && i.pair === this.pairKey && i.points.length > 1) ?? null; }
+  get curve() { return this.curveItem?.points ?? []; }
+
+  nextColor() {
+    const used = (c) => this.items.filter((i) => i.color.join() === c.join()).length;  // by value: loaded colours are copies
+    return PALETTE.reduce((best, c) => (used(c) < used(best) ? c : best), PALETTE[0]);
+  }
+
+  // add a selection; returns the item, or null when the limit for its kind is reached (8 rectangles, 4 curves in total)
+  add(kind, data, pair = this.pairKey) {
+    const limit = kind === 'rect' ? MAX_RECTS : MAX_CURVES;
+    if (this.items.filter((i) => i.kind === kind).length >= limit) return null;
+    const taken = new Set(this.items.filter((i) => i.kind === kind && i.pair === pair).map((i) => i.n));
+    let n = 1;
+    while (taken.has(n)) n++;
+    const item = { id: this.nextId++, kind, pair, n, name: `${PAIRS[pair].label} ${kind === 'rect' ? 'rectangle' : 'curve'} ${n}`,
+      color: data.color ?? this.nextColor(), visible: true, style: 'surface', ...data };
+    this.items.push(item);
+    return item;
+  }
+
+  remove(id) {
+    this.items = this.items.filter((i) => i.id !== id);
+    if (this.selectedId === id) this.selectedId = null;
+    this.draw();
+    this.onChange();
+  }
 
   // hists: { ts, to?, so? } of the step to show; max: optional { ts, to, so } normalisation (keeps brightness
   // comparable between time steps)
@@ -185,12 +215,7 @@ export class TSPanel {
   down(e) {
     this.cv.setPointerCapture(e.pointerId);
     const p = this.fromEvent(e);
-    if (this.tool === 'rect') {
-      this.drag = { s0: p[0], t0: p[1], s1: p[0], t1: p[1], color: RECT_COLORS[this.rects.length % RECT_COLORS.length] };
-    } else {
-      this.curve = [p];
-      this.drag = true;
-    }
+    this.drag = this.tool === 'rect' ? { s0: p[0], t0: p[1], s1: p[0], t1: p[1], color: this.nextColor() } : { points: [p] };
   }
 
   move(e) {
@@ -199,44 +224,46 @@ export class TSPanel {
     if (this.tool === 'rect') {
       this.drag.s1 = p[0]; this.drag.t1 = p[1];
     } else {
-      const q = this.curve[this.curve.length - 1];
-      if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 0.02 && this.curve.length < MAX_CURVE) this.curve.push(p);
+      const q = this.drag.points[this.drag.points.length - 1];
+      if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 0.02 && this.drag.points.length < MAX_CURVE) this.drag.points.push(p);
     }
     this.draw();
   }
 
   up() {
     if (!this.drag) return;
-    if (this.tool === 'rect') {
-      const d = this.drag;
-      if (this.rects.length < MAX_RECTS && Math.abs(d.s1 - d.s0) > 0.01 && Math.abs(d.t1 - d.t0) > 0.01)
-        this.rects.push({ s0: Math.min(d.s0, d.s1), s1: Math.max(d.s0, d.s1), t0: Math.min(d.t0, d.t1), t1: Math.max(d.t0, d.t1), color: d.color });
-    } else if (this.curve.length < 2) {
-      this.curve = [];
-    }
+    const d = this.drag;
     this.drag = null;
+    if (this.tool === 'rect') {
+      if (Math.abs(d.s1 - d.s0) > 0.01 && Math.abs(d.t1 - d.t0) > 0.01)
+        this.add('rect', { s0: Math.min(d.s0, d.s1), s1: Math.max(d.s0, d.s1), t0: Math.min(d.t0, d.t1), t1: Math.max(d.t0, d.t1), color: d.color });
+    } else if (d.points.length > 1) {
+      this.add('curve', { points: d.points });
+    }
     this.draw();
     this.onChange();
   }
 
+  // delete all rectangles or all curves of the active pair
   clear(what) {
-    if (what === 'rects') this.rects = [];
-    else this.curve = [];
+    const kind = what === 'rects' ? 'rect' : 'curve';
+    this.items = this.items.filter((i) => !(i.kind === kind && i.pair === this.pairKey));
+    if (!this.items.some((i) => i.id === this.selectedId)) this.selectedId = null;
     this.draw();
     this.onChange();
   }
 
-  // selection of the active pair
-  setSelection(rects, curve) {
-    this.rects = rects; this.curve = curve;
-    this.draw();
-    this.onChange();
-  }
-
-  // all pairs: { ts: { rects, curve }, ... } (for save / load)
-  getSelections() { return structuredClone(this.sel); }
-  setSelections(sel) {
-    for (const k of Object.keys(PAIRS)) this.sel[k] = { rects: sel?.[k]?.rects ?? [], curve: sel?.[k]?.curve ?? [] };
+  // for save / load: plain data of all selections
+  getSelections() { return structuredClone(this.items); }
+  setSelections(list) {
+    this.items = [];
+    this.selectedId = null;
+    for (const it of list ?? []) {
+      if (!PAIRS[it.pair] || !['rect', 'curve'].includes(it.kind)) continue;
+      const { id, n, name, ...rest } = it;
+      const added = this.add(it.kind, rest, it.pair);
+      if (added && name) added.name = name;
+    }
     this.draw();
     this.onChange();
   }
@@ -276,17 +303,23 @@ export class TSPanel {
     ctx.fillText(`${names[iy]} (${units[iy]})`, 0, 0);
     ctx.restore();
 
-    const all = !this.showRects ? [] : this.drag && this.tool === 'rect' ? [...this.rects, this.drag] : this.rects;
-    for (const r of all) {
-      const [a, b] = this.toPx(r.s0, r.t1), [c, d] = this.toPx(r.s1, r.t0);
-      ctx.fillStyle = `rgba(${r.color},0.25)`; ctx.strokeStyle = `rgb(${r.color})`; ctx.lineWidth = 2;
-      ctx.fillRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
-      ctx.strokeRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+    const mine = this.items.filter((i) => i.pair === this.pairKey);
+    if (this.showRects) {
+      const live = this.drag && this.tool === 'rect' ? [{ ...this.drag, visible: true }] : [];
+      for (const r of [...mine.filter((i) => i.kind === 'rect'), ...live]) {
+        const [a, b] = this.toPx(r.s0, r.t1), [c, d] = this.toPx(r.s1, r.t0);
+        ctx.fillStyle = `rgba(${r.color},0.25)`; ctx.strokeStyle = `rgb(${r.color})`; ctx.lineWidth = 2;
+        ctx.fillRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+        ctx.strokeRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+      }
     }
-    if (this.curve.length && this.showCurve) {
-      ctx.strokeStyle = rgb(CURVE_RGB); ctx.lineWidth = 2; ctx.beginPath();
-      this.curve.forEach(([s, t], i) => { const [px, py] = this.toPx(s, t); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
-      ctx.stroke();
+    if (this.showCurve) {
+      const live = this.drag?.points ? [{ points: this.drag.points, color: this.nextColor() }] : [];
+      for (const c of [...mine.filter((i) => i.kind === 'curve'), ...live]) {
+        ctx.strokeStyle = rgb(c.color); ctx.lineWidth = 2; ctx.beginPath();
+        c.points.forEach(([s, t], i) => { const [px, py] = this.toPx(s, t); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+        ctx.stroke();
+      }
     }
     this.drawLegend();
   }
