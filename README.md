@@ -9,9 +9,8 @@ Needs Git and Node.js 20.19 or newer.
 
 1. Clone the repo and switch to the working branch:
 
-       git clone https://github.com/Chinmay0303/oceanmassexplorer.git
+       git clone git@github.com:Navinas3460/oceanmassexplorer.git
        cd oceanmassexplorer
-       git checkout claude/amazing-tesla-1jshar
 
 2. Install the dependencies:
 
@@ -26,8 +25,6 @@ Needs Git and Node.js 20.19 or newer.
        cd public/data
        unzip <downloads-directory>/woa23.zip
        cd ../..
-
-   On Windows use right-click, Extract All, and choose the `public\data` folder. If `unzip` is missing on Linux: `sudo apt install unzip`.
 
 5. Check that this file exists (the folder must not be nested twice):
 
