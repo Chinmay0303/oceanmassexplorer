@@ -1,7 +1,7 @@
 import './simple.css';
 import './style.css';
 import { VERT, FRAG, MAX_CURVE, MAX_RECTS } from './shaders.js';
-import { TSPanel, buildHists } from './ts.js';
+import { TSPanel, buildHists, PAIRS } from './ts.js';
 import { themeColors, CURVE_RGB } from './theme.js';
 
 import { openData } from './data.js';
@@ -238,6 +238,7 @@ function uploadSelection() {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SDF, SDF, gl.RG, gl.FLOAT, curveSDF(panel.curve.slice(0, n)));
     sdfKey = key;
   }
+  gl.uniform2i(U.uPair, panel.pair.x, panel.pair.y);
   gl.uniform1i(U.uNCurve, n);
   const rects = panel.rects.slice(0, MAX_RECTS);
   const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3);
@@ -250,6 +251,8 @@ function uploadSelection() {
   gl.uniform1i(U.uNRect, rects.length);
 }
 
+$('pair').addEventListener('change', () => panel.setPair($('pair').value));
+[...$('pair').options].forEach((o) => { o.disabled = PAIRS[o.value].x >= meta.fields.length; });  // oxygen pairs need the oxygen field
 document.querySelectorAll('input[name=tool]').forEach((r) => r.addEventListener('change', () => { panel.tool = r.value; }));
 $('clearRects').onclick = () => panel.clear('rects');
 $('clearCurve').onclick = () => panel.clear('curve');
@@ -379,7 +382,7 @@ syncStepUi();
 $('save').onclick = () => {
   const state = {
     controls: Object.fromEntries([...ids, ...checks].map((id) => [id, checks.includes(id) ? $(id).checked : $(id).value])),
-    camera: cam, rects: panel.rects, curve: panel.curve,
+    camera: cam, pair: panel.pairKey, selections: panel.getSelections(),
     data: { dataset: cur.name, step: cur.k },
   };
   const a = document.createElement('a');
@@ -404,7 +407,11 @@ $('file').onchange = async (e) => {
       else setStep(k);
     }
     applyControls();
-    panel.setSelection(s.rects ?? [], s.curve ?? []);
+    const pk = PAIRS[s.pair] && !$('pair').querySelector(`option[value=${s.pair}]`).disabled ? s.pair : 'ts';
+    $('pair').value = pk;
+    panel.setPair(pk);
+    // configs saved before the pair selector only have rects/curve (T-S)
+    panel.setSelections(s.selections ?? { ts: { rects: s.rects ?? [], curve: s.curve ?? [] } });
   } catch (err) {
     alert('Could not load configuration: ' + err.message);
   }

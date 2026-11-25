@@ -28,6 +28,7 @@ uniform vec3 uEye, uRight, uUp, uFwd;
 uniform float uTan, uAspect, uD;
 uniform vec3 uClipMin, uClipMax;
 uniform int uMode;        // 0 = 1D transfer function, 1 = T-S regions
+uniform ivec2 uPair;      // channels of uVol that form the diagram's (x, y): (1,0) = (S,T), (2,0) = (O2,T), (2,1) = (O2,S)
 uniform int uField;       // 0 = T, 1 = S, 2 = O2 (1D mode); indexes the channels of uVol
 uniform vec2 uWin;
 uniform float uOpacity;
@@ -60,11 +61,11 @@ vec3 toTex(vec3 p) { return vec3(p.x * 0.5 + 0.5, 0.5 - p.z, 0.5 - p.y / (2.0 * 
 
 bool inClip(vec3 tc) { return all(greaterThanEqual(tc, uClipMin)) && all(lessThanEqual(tc, uClipMax)); }
 
-// (S, T) at tc, false on land
+// (x, y) of the active diagram pair at tc, false on land
 bool sampleST(vec3 tc, out vec2 st) {
   vec4 v = vol(tc);
   if (v.a < 0.5) return false;
-  st = v.gr;
+  st = vec2(v[uPair.x], v[uPair.y]);
   return true;
 }
 

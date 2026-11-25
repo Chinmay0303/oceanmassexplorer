@@ -15,14 +15,15 @@
   <header><h1>Ocean Water Mass Explorer</h1></header>
 
   <section>
-    <h2>Temperature–Salinity diagram</h2>
+    <h2>Water-mass diagram</h2>
+    <div class="field"><label for="pair">Diagram</label><select id="pair"><option value="ts">Temperature – Salinity</option><option value="to">Temperature – Oxygen</option><option value="so">Salinity – Oxygen</option></select></div>
     <canvas id="ts"></canvas>
     <div class="row">
       <div class="check"><input id="toolRect" type="radio" name="tool" value="rect" checked><label for="toolRect">Rectangle</label></div>
       <div class="check"><input id="toolCurve" type="radio" name="tool" value="curve"><label for="toolCurve">Curve</label></div>
     </div>
     <div class="row"><button id="clearRects">Clear rectangles</button><button id="clearCurve">Clear curve</button></div>
-    <p class="hint">Each rectangle is a closed control polygon, and a curve is an open one. Both extract fiber surfaces in 3D (up to 8 rectangles).</p>
+    <p class="hint">Drag in the diagram to draw. A rectangle selects a region (its boundary surface is shown), a curve extracts a fiber surface. Up to 8 rectangles. Each diagram keeps its own selections; the 3D view shows the ones of the diagram chosen above.</p>
   </section>
 
   <details open>
