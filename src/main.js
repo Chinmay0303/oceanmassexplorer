@@ -305,7 +305,7 @@ addEventListener('keydown', (e) => {  // Delete / Backspace removes the selected
 
 // ---------- controls ----------
 for (const [v, label] of CHOICES) $('cmap').add(new Option(label, v));
-const ids = ['field', 'cmap', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+const ids = ['quality', 'field', 'cmap', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
 function applyControls() {
   const tf = $('tf1d').checked;
   gl.uniform1i(U.uTF1D, tf ? 1 : 0);
@@ -315,6 +315,7 @@ function applyControls() {
   const lo = +$('winLo').value, hi = Math.max(+$('winHi').value, lo + 0.005);
   gl.uniform2f(U.uWin, lo, hi);
   gl.uniform1f(U.uOpacity, +$('opacity').value);
+  gl.uniform1i(U.uSteps, +$('quality').value);
   gl.uniform1f(U.uContext, +$('context').value);
   gl.uniform1f(U.uD, +$('depthScale').value * cur.nz / 102);  // same height per level in every dataset
   const c = [0, 1, 2, 3, 4, 5].map((i) => +$('c' + i).value);

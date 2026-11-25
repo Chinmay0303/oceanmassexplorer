@@ -46,6 +46,7 @@ uniform vec4 uRect[${MAX_RECTS}];       // rectangles drawn as surfaces: centre 
 uniform vec3 uRectColor[${MAX_RECTS}];
 uniform int uRectPair[${MAX_RECTS}];    // diagram of each rectangle
 uniform float uBand;
+uniform int uSteps;       // ray-march steps (quality setting), at most MAXSTEPS
 uniform vec3 uBg, uLand, uEdge;  // theme colours: background, land (slice mode), box edges
 uniform bool uPick;       // picking pass: write the first ocean sample under uPickNdc into 4 pixels instead of colours
 uniform vec2 uPickNdc;
@@ -92,12 +93,17 @@ float sdBox(vec2 st, int i) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
 }
 
-// signed distance of selection id at sample v: id < MAX_RECTS is a rectangle, otherwise curve id - MAX_RECTS
-float selDist(vec4 v, int id) {
+// signed distance of selection id at sample v: id < MAX_RECTS is a rectangle, otherwise curve id - MAX_RECTS.
+// 'edge' is set when the nearest point of a curve is an endpoint (the sign is meaningless there).
+float selDistE(vec4 v, int id, out bool edge) {
+  edge = false;
   if (id < ${MAX_RECTS}) return sdBox(stOf(v, uRectPair[id]), id);
-  bool e;
   int c = id - ${MAX_RECTS};
-  return curveDist(stOf(v, uCurvePair[c]), c, e);
+  return curveDist(stOf(v, uCurvePair[c]), c, edge);
+}
+float selDist(vec4 v, int id) {
+  bool e;
+  return selDistE(v, id, e);
 }
 
 bool fiberAt(vec3 p, int id, out float f) {
@@ -105,6 +111,25 @@ bool fiberAt(vec3 p, int id, out float f) {
   if (!sampleV(toTex(p), v)) return false;
   f = selDist(v, id);
   return true;
+}
+
+// Fiber surface point between the ray samples pa and pb whose distances to selection id have different signs (fa at pa):
+// bisection on the distance along the segment. Returns false when the root is not a real surface point: a curve's
+// signed distance also flips sign across its medial axis (e.g. inside a sharp kink), where the distance at the root
+// is not ~0. Rectangle distances are continuous, so every sign change is a true crossing.
+bool refineHit(vec3 pa, vec3 pb, float fa, int id, out vec3 ph) {
+  float sa = sign(fa), fm = 0.0;
+  bool edge = false;
+  vec3 a = pa, b = pb;
+  for (int k = 0; k < 7; k++) {
+    vec3 m = 0.5 * (a + b);
+    vec4 vm;
+    if (!sampleV(toTex(m), vm)) { ph = m; return false; }  // land between the samples: nothing to draw
+    fm = selDistE(vm, id, edge);
+    if (fm * sa > 0.0) a = m; else b = m;
+  }
+  ph = 0.5 * (a + b);
+  return id < ${MAX_RECTS} || (!edge && abs(fm) < 0.01);
 }
 
 // 1 inside the visible ocean, 0 elsewhere (land, clipped away, outside the box)
@@ -241,8 +266,8 @@ void main() {
   float tn = max(max(tmin.x, tmin.y), max(tmin.z, 0.0)), tf = min(min(tmax.x, tmax.y), tmax.z);
   if (tf <= tn) { outColor = vec4(bg, 1.0); return; }
 
-  const int STEPS = 320;
-  float dt = (tf - tn) / float(STEPS);
+  const int MAXSTEPS = 640;
+  float dt = (tf - tn) / float(uSteps);
   float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float t = tn + dt * jitter;
 
@@ -255,7 +280,8 @@ void main() {
   for (int j = 0; j < ${MAX_CURVES}; j++) { fpc[j] = 0.0; fpe[j] = 1.0; }
   for (int j = 0; j < ${MAX_RECTS}; j++) fpr[j] = 0.0;
 
-  for (int i = 0; i < STEPS; i++) {
+  for (int i = 0; i < MAXSTEPS; i++) {
+    if (i >= uSteps) break;
     vec3 p = ro + rd * t;
     vec3 tc = toTex(p);
     vec4 v;
@@ -283,23 +309,27 @@ void main() {
         if (ci >= uNCurve) break;
         bool edge;
         float f = curveDist(stOf(v, uCurvePair[ci]), ci, edge);
-        if (prevOk && !edge && fpe[ci] < 0.5 && f * fpc[ci] < 0.0 && abs(f) < uBand * 8.0 && abs(fpc[ci]) < uBand * 8.0) {
-          vec3 ph = mix(pPrev, p, abs(fpc[ci]) / (abs(fpc[ci]) + abs(f)));
-          vec3 col = fiberShade(fiberNormal(ph, ${MAX_RECTS} + ci), rd, uCurveColor[ci]);
-          float fa = 0.9;
-          acc.rgb += (1.0 - acc.a) * fa * col;
-          acc.a += (1.0 - acc.a) * fa;
+        if (prevOk && !edge && fpe[ci] < 0.5 && f * fpc[ci] < 0.0 && abs(f) < 0.3 && abs(fpc[ci]) < 0.3) {
+          vec3 ph;
+          if (refineHit(pPrev, p, fpc[ci], ${MAX_RECTS} + ci, ph)) {
+            vec3 col = fiberShade(fiberNormal(ph, ${MAX_RECTS} + ci), rd, uCurveColor[ci]);
+            float fa = 0.9;
+            acc.rgb += (1.0 - acc.a) * fa * col;
+            acc.a += (1.0 - acc.a) * fa;
+          }
         }
         fpc[ci] = f; fpe[ci] = edge ? 1.0 : 0.0;
       }
       for (int ri = 0; ri < ${MAX_RECTS}; ri++) {  // rectangle surfaces: same sign-change test
         if (ri >= uNRect) break;
         float f = sdBox(stOf(v, uRectPair[ri]), ri), fp = fpr[ri];
-        if (prevOk && f * fp < 0.0 && abs(f) < uBand * 8.0 && abs(fp) < uBand * 8.0) {
-          vec3 ph = mix(pPrev, p, abs(fp) / (abs(fp) + abs(f)));
-          vec3 col = fiberShade(fiberNormal(ph, ri), rd, uRectColor[ri]);
-          acc.rgb += (1.0 - acc.a) * 0.9 * col;
-          acc.a += (1.0 - acc.a) * 0.9;
+        if (prevOk && f * fp < 0.0) {
+          vec3 ph;
+          if (refineHit(pPrev, p, fp, ri, ph)) {
+            vec3 col = fiberShade(fiberNormal(ph, ri), rd, uRectColor[ri]);
+            acc.rgb += (1.0 - acc.a) * 0.9 * col;
+            acc.a += (1.0 - acc.a) * 0.9;
+          }
         }
         fpr[ri] = f;
       }
