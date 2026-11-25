@@ -1,11 +1,13 @@
 import { MAX_CURVE, MAX_RECTS } from './shaders.js';
 import { themeColors, CURVE_RGB } from './theme.js';
+import { colorAt, mapName } from './colormaps.js';
 
 const BINS = 256;
 // categorical colours, none of them blue (the palette blues are the ocean) or the curve's green
 export const RECT_COLORS = [[214, 48, 49], [230, 126, 34], [142, 68, 173], [233, 30, 140], [241, 196, 15], [121, 85, 72], [0, 150, 136], [90, 90, 90]];
 const rgb = (c) => `rgb(${c})`;
-const M = { l: 44, r: 10, t: 10, b: 32 }; // plot margins in px
+const M = { l: 50, r: 10, t: 10, b: 40 }; // plot margins in px
+const STRIP = 5;                          // width of the colour strips along the axes
 
 // Diagram pairs. x / y are field indices (0 = T, 1 = S, 2 = O2) = channels of the volume texture, so the shader
 // can look up the pair with uVol[x], uVol[y]. Selections (rectangles, curve) belong to one pair.
@@ -37,7 +39,7 @@ export function buildHists(d, { nx, ny, nz, depth, lat0, dlat }) {
 }
 
 // "Nice" tick values (1, 2, 5 x 10^k) inside [lo, hi]
-function ticks(lo, hi, n = 4) {
+export function niceTicks(lo, hi, n = 4) {
   const raw = (hi - lo) / n, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
   const step = (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
   const out = [];
@@ -61,6 +63,7 @@ export class TSPanel {
     this.showRects = true;
     this.drag = null;
     this.theme = themeColors();
+    this.cmapChoice = 'auto';  // colour-map choice of the 1D transfer function (colours the axis strips)
     this.hists = null;
     this.histMax = null;
     this.histImg = this.renderHist();
@@ -103,20 +106,50 @@ export class TSPanel {
     this.draw();
   }
 
+  // density colours: u in [0, 1] -> [r, g, b]
+  histRamp() {
+    // light theme: accent background -> secondary -> primary; dark theme: -> primary -> tertiary
+    const { bg, accentBg, primary, secondary, tertiary } = this.theme;
+    const dark = bg[0] + bg[1] + bg[2] < 384;
+    const stops = dark ? [accentBg, primary, tertiary] : [accentBg, secondary, primary];
+    return (u) => {
+      const f = u * (stops.length - 1), k = Math.min(Math.floor(f), stops.length - 2), w = f - k;
+      return stops[k].map((c, i) => c * (1 - w) + stops[k + 1][i] * w);
+    };
+  }
+
+  // small colour bar (#histLegend) explaining the histogram colours
+  drawLegend() {
+    const cv = document.getElementById('histLegend');
+    if (!cv) return;
+    const r = cv.getBoundingClientRect();
+    if (r.width < 2) return;
+    const dpr = devicePixelRatio || 1;
+    if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) {
+      cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+    }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, r.width, r.height);
+    const { textLight, border } = this.theme, ramp = this.histRamp(), x0 = 6, x1 = r.width - 6;
+    const g = ctx.createLinearGradient(x0, 0, x1, 0);
+    for (let i = 0; i <= 8; i++) g.addColorStop(i / 8, rgb(ramp(0.15 + 0.85 * (i / 8)).map(Math.round)));
+    ctx.fillStyle = g; ctx.fillRect(x0, 2, x1 - x0, 8);
+    ctx.strokeStyle = rgb(border); ctx.strokeRect(x0 + 0.5, 2.5, x1 - x0 - 1, 7);
+    ctx.fillStyle = rgb(textLight);
+    ctx.font = `11px ${getComputedStyle(this.cv).fontFamily}`;
+    ctx.textAlign = 'left'; ctx.fillText('little water', x0, 23);
+    ctx.textAlign = 'right'; ctx.fillText('much water', x1, 23);
+    ctx.textAlign = 'center'; ctx.fillText('volume (log)', r.width / 2, 23);
+  }
+
   renderHist() {
     const img = new ImageData(BINS, BINS);
     const hist = this.hists?.[this.pairKey];
     let max = this.histMax?.[this.pairKey] ?? 0;
     if (hist && !max) for (const v of hist) max = Math.max(max, v);
     const lmax = Math.log1p(max) || 1;
-    // light theme: accent background -> secondary -> primary; dark theme: -> primary -> tertiary
-    const { bg, accentBg, primary, secondary, tertiary } = this.theme;
-    const dark = bg[0] + bg[1] + bg[2] < 384;
-    const stops = dark ? [accentBg, primary, tertiary] : [accentBg, secondary, primary];
-    const ramp = (u) => {
-      const f = u * (stops.length - 1), k = Math.min(Math.floor(f), stops.length - 2), w = f - k;
-      return stops[k].map((c, i) => c * (1 - w) + stops[k + 1][i] * w);
-    };
+    const { bg } = this.theme, ramp = this.histRamp();
     for (let ty = 0; ty < BINS; ty++)
       for (let sx = 0; sx < BINS; sx++) {
         const v = hist ? Math.min(1, Math.log1p(hist[ty * BINS + sx]) / lmax) : 0;
@@ -222,12 +255,22 @@ export class TSPanel {
     ctx.fillStyle = rgb(textLight); ctx.strokeStyle = rgb(border); ctx.lineWidth = 1;
     ctx.font = `11px ${getComputedStyle(this.cv).fontFamily}`;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    // colour strips along the axes: the colour map each field uses in the 1D transfer function
+    const strip = (name, ax, ay, bx, by) => {
+      const g = ctx.createLinearGradient(ax, ay, bx, by);
+      for (let i = 0; i <= 16; i++) g.addColorStop(i / 16, rgb(colorAt(name, i / 16).map(Math.round)));
+      return g;
+    };
+    ctx.save();
+    ctx.fillStyle = strip(mapName(ix, this.cmapChoice), x0, 0, x1, 0); ctx.fillRect(x0, y1 + 2, x1 - x0, STRIP);
+    ctx.fillStyle = strip(mapName(iy, this.cmapChoice), 0, y1, 0, y0); ctx.fillRect(x0 - 2 - STRIP, y0, STRIP, y1 - y0);
+    ctx.restore();
     const [xl, xh] = ranges[fields[ix]], [yl, yh] = ranges[fields[iy]];
     ctx.textAlign = 'center';
-    for (const v of ticks(xl, xh)) ctx.fillText(v, this.toPx((v - xl) / (xh - xl), 0)[0], y1 + 13);
-    ctx.fillText(`${names[ix]} (${units[ix]})`, (x0 + x1) / 2, y1 + 27);
+    for (const v of niceTicks(xl, xh)) ctx.fillText(v, this.toPx((v - xl) / (xh - xl), 0)[0], y1 + STRIP + 15);
+    ctx.fillText(`${names[ix]} (${units[ix]})`, (x0 + x1) / 2, y1 + STRIP + 29);
     ctx.textAlign = 'right';
-    for (const v of ticks(yl, yh)) ctx.fillText(v, x0 - 5, this.toPx(0, (v - yl) / (yh - yl))[1] + 4);
+    for (const v of niceTicks(yl, yh)) ctx.fillText(v, x0 - STRIP - 5, this.toPx(0, (v - yl) / (yh - yl))[1] + 4);
     ctx.save();
     ctx.translate(11, (y0 + y1) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center';
     ctx.fillText(`${names[iy]} (${units[iy]})`, 0, 0);
@@ -245,6 +288,7 @@ export class TSPanel {
       this.curve.forEach(([s, t], i) => { const [px, py] = this.toPx(s, t); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
       ctx.stroke();
     }
+    this.drawLegend();
   }
 
   // 256x256 RGBA texture data for the region transfer function of the active pair (x = first axis, y = second)

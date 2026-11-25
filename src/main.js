@@ -6,6 +6,7 @@ import { themeColors, CURVE_RGB } from './theme.js';
 
 import { openData } from './data.js';
 import { colormapTable, mapName, CHOICES } from './colormaps.js';
+import { drawColorbar } from './legend.js';
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
@@ -281,6 +282,7 @@ function applyControls() {
   gl.uniform1i(U.uRegions, $('regions').checked ? 1 : 0);
   gl.uniform1i(U.uFill, $('fill').checked ? 1 : 0);
   panel.showRects = $('regions').checked;
+  panel.cmapChoice = $('cmap').value;
   panel.draw();
   const k = +$('sliceDepth').value;
   $('sliceLabel').textContent = `${cur.ds.depth[k]} m`;
@@ -288,6 +290,8 @@ function applyControls() {
   const fi = +$('field').value, [r0, r1] = meta.ranges[meta.fields[fi]];
   const real = (u) => (r0 + u * (r1 - r0)).toFixed(fi === 2 ? 0 : 1);
   $('winLabel').textContent = `${meta.names[fi]} window: ${real(lo)} to ${real(hi)} ${meta.units[fi]}`;
+  $('cbar').hidden = +$('mode').value !== 0;  // the colour bar belongs to the 1D transfer function
+  if (!$('cbar').hidden) drawColorbar($('cbar'), { map: cmapName, lo: r0 + lo * (r1 - r0), hi: r0 + hi * (r1 - r0), label: meta.names[fi], unit: meta.units[fi] });
   interact();
 }
 const checks = ['fiber', 'regions', 'fill', 'slice'];
@@ -476,7 +480,7 @@ function applyTheme() {
   panel.refreshTheme();
   redraw();
 }
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyTheme(); applyControls(); });
 applyTheme();
 
 // starting selection: warm salty box plus a thermocline-like curve
