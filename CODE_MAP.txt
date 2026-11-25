@@ -286,3 +286,22 @@ PART 14. COLOUR MAPS (plan step 1 of D23 in log.md)
  14.3 main.js updateColormap()   re-uploads the 256x1 table (texture unit 2) when field or "Colour map" changes; called from applyControls.
  14.4 index.html #cmap           "Colour map" select in the Volume group; value saved with the config (listed in `ids`).
  Replaces 3.6 (old fixed viridis-like table). The shader is unchanged: uTF1 still holds the table.
+
+=================================================================================
+PART 15. LEGENDS AND SELECTIONS (steps 2-4 of D23 in log.md)
+=================================================================================
+ 15.1 src/legend.js             drawColorbar(): colour bar with real-unit ticks for the 1D transfer function (#cbar).
+ 15.2 ts.js legends             axis colour strips and drawLegend() (#histLegend, histogram colours); histRamp(); niceTicks() exported.
+ 15.3 ts.js selection model     items[] (rect/curve) with add(), remove(), clearAll(), select(), setVisible(), setStyle(), edit();
+                                PALETTE + nextColor(); getters rects, surfaceRects, volumeRects, curveItem; getSelections()/setSelections().
+ 15.4 ts.js Select tool         hitTest(), editDrag() (move / corner resize), down()/move()/up() for the three tools, setTool(), hover cursors.
+                                3D is updated once when a drag ends. Replaces 5.5-5.7 (clear() is gone).
+ 15.5 src/selections-ui.js      renderSelections(): the sidebar list; forwards clicks to panel methods.
+ 15.6 main.js                   renderList()/onSelect wiring, uploadSelection() (surface rects -> uRect*, volume rects -> region texture + uFill,
+                                first visible curve -> SDF + colour), Delete all button, Delete/Backspace key, tf1d checkbox in applyControls,
+                                migrateSelections() for old save formats. Replaces the global fiber/regions/fill controls.
+ 15.7 shaders.js                uTF1D (bool) replaces uMode; uFill = some rectangles drawn as volume; uRegions/uFiber removed; 1D colouring and
+                                rectangle volumes combine with the 'over' operator; MAX_CURVES = 4 (not used by the shader until step 5).
+ 15.8 index.html / style.css    tools Rectangle/Curve/Select, #selList, Delete all, 1D checkbox, #cbar, #histLegend, .sel* styles.
+ Interaction map additions: Select tool drag -> ts.js editDrag (L2/L3) -> onChange at drag end -> uploadSelection (L4) -> shader (L5);
+ list buttons -> panel methods -> same path; Delete key -> panel.deleteSelected().

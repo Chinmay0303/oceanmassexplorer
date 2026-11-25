@@ -43,10 +43,12 @@ If the data is missing, the app falls back to the old annual temperature/salinit
 
 - **Data**: choose Annual (0-5500 m) or Monthly (0-1500 m). Monthly loads all 12 months first (about 0.4 GB of GPU memory),
   then the month slider, Play/Pause (also Space), speed, month blending and looping become available.
-- **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen, then drag to draw a rectangle
-  (region) or a curve (fiber surface). Every diagram keeps its own selections; the 3D view shows the chosen diagram's.
-- **Volume**: 1D transfer function mode can colour by temperature, salinity or oxygen, each with its oceanographic colour map
-  (thermal, haline, oxy); Viridis or Cividis can be chosen instead.
+- **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen. Tools: Rectangle and Curve draw
+  (up to 8 rectangles and 4 curves), Select picks an item, drag moves it, a corner resizes a rectangle, the Delete key removes it.
+  The list below the diagram shows every selection: choose how a rectangle is drawn in 3D (Surface, Volume or both), hide it, or delete it
+  (Delete all removes everything). The 3D view currently shows the selections of the chosen diagram.
+- **Volume**: tick "Colour the ocean by one field" to colour by temperature, salinity or oxygen with its oceanographic colour map
+  (thermal, haline, oxy; Viridis or Cividis can be chosen instead); a colour bar shows the values.
 - Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.
 
 ## More
