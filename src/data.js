@@ -83,7 +83,7 @@ export async function openData() {
       const f = (i) => (i < meta.fields.length ? all.subarray(i * n, (i + 1) * n) : null);
       out = { t: f(0), s: f(1), o: f(2), mask: new Uint8Array(mask), nz: ds.nz };
     }
-    cache.set(key, out);
+    if (ds.steps.length === 1) cache.set(key, out);  // multi-step datasets are big and live on the GPU instead
     return out;
   }
   return { meta, base, loadStep };

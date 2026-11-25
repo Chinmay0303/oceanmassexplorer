@@ -56,28 +56,44 @@ function tex(target, unit, setup) {
   return t;
 }
 
-// volume: rgba16f = (T, S, O2, ocean mask), uploaded one depth level at a time to keep memory low.
-// Recreated when the number of levels changes (annual 102, monthly 57).
-let volTex = null, volNz = 0;
-function uploadVolume(d) {
-  gl.activeTexture(gl.TEXTURE0);
-  if (!volTex || volNz !== d.nz) {
-    if (volTex) gl.deleteTexture(volTex);
-    volTex = tex(gl.TEXTURE_3D, 0, () => gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, d.nz));
-    volNz = d.nz;
-  } else gl.bindTexture(gl.TEXTURE_3D, volTex);
-  const n = nx * ny, level = new Float32Array(n * 4);
-  for (let k = 0; k < d.nz; k++) {
-    for (let i = 0, idx = k * n; i < n; i++, idx++) {
-      level[i * 4] = d.t[idx] / 65535;
-      level[i * 4 + 1] = d.s[idx] / 65535;
-      level[i * 4 + 2] = d.o ? d.o[idx] / 65535 : 0;
-      level[i * 4 + 3] = d.mask[idx] & 1;
+// Volumes: one RGBA16F 3D texture (T, S, O2, ocean mask) per time step of the current dataset, uploaded one
+// depth level at a time to keep memory low. Annual = 1 texture (53 MB), monthly = 12 textures (12 x 30 MB), so every
+// month is on the GPU and switching / animating needs no upload. Uploads use texture unit UPLOAD_UNIT so they never
+// disturb the units the shader samples from.
+const UPLOAD_UNIT = 7;
+function makeVolume(d) {
+  return tex(gl.TEXTURE_3D, UPLOAD_UNIT, () => {
+    gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, d.nz);
+    const n = nx * ny, level = new Float32Array(n * 4);
+    for (let k = 0; k < d.nz; k++) {
+      for (let i = 0, idx = k * n; i < n; i++, idx++) {
+        level[i * 4] = d.t[idx] / 65535;
+        level[i * 4 + 1] = d.s[idx] / 65535;
+        level[i * 4 + 2] = d.o ? d.o[idx] / 65535 : 0;
+        level[i * 4 + 3] = d.mask[idx] & 1;
+      }
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, k, nx, ny, 1, gl.RGBA, gl.FLOAT, level);
     }
-    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, k, nx, ny, 1, gl.RGBA, gl.FLOAT, level);
-  }
+  });
 }
-uploadVolume(first);
+// per-dataset state kept on `cur`: tex[k] GPU volume of step k, hists[k] its diagram histograms,
+// histMax = brightness normalisation over all loaded steps, ready = number of loaded steps
+function resetVolumes() {
+  for (const t of cur.tex ?? []) gl.deleteTexture(t);
+  Object.assign(cur, { tex: [], hists: [], histMax: {}, ready: 0 });
+}
+function addStep(k, d) {
+  cur.tex[k] = makeVolume(d);
+  cur.hists[k] = buildHists(d, panelMeta());
+  for (const [key, h] of Object.entries(cur.hists[k])) {
+    let m = cur.histMax[key] ?? 0;
+    for (const v of h) if (v > m) m = v;
+    cur.histMax[key] = m;
+  }
+  cur.ready++;
+}
+resetVolumes();
+addStep(0, first);
 
 // 1D colour map (viridis-like stops)
 const STOPS = [[68, 1, 84], [65, 68, 135], [42, 120, 142], [34, 168, 132], [122, 209, 81], [253, 231, 37]];
@@ -208,7 +224,7 @@ function moveByKeys(dt) {
 
 // ---------- T-S panel ----------
 const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, units: meta.units, ranges: meta.ranges }, () => { uploadSelection(); redraw(); });
-panel.setHists(buildHists(first, panelMeta()));
+panel.setHists(cur.hists[0], cur.histMax);
 
 function uploadSelection() {
   gl.activeTexture(gl.TEXTURE3);
@@ -285,28 +301,58 @@ function syncStepUi() {
   $('stepRow').hidden = ds.steps.length < 2;
   stepEl.max = ds.steps.length - 1;
   stepEl.value = cur.k;
+  stepEl.disabled = cur.ready < ds.steps.length;  // steps are selectable once all are on the GPU
   $('stepLabel').textContent = ds.stepLabels[cur.k];
   $('sliceDepth').max = cur.nz - 1;
   $('sliceDepth').value = Math.min(+$('sliceDepth').value, cur.nz - 1);
 }
 let loadToken = 0;
-// load dataset `name`, step index `k` and show it; later calls win over earlier slow ones
-async function showStep(name, k) {
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+const showHists = () => panel.setHists(cur.hists[cur.k], cur.histMax);
+
+// show step k of the current dataset (must be loaded)
+function setStep(k) {
+  if (!cur.tex[k]) return;
+  cur.k = k;
+  stepEl.value = k;
+  $('stepLabel').textContent = cur.ds.stepLabels[k];
+  showHists();
+  redraw();
+}
+// load the remaining steps of the current dataset in the background (token = request that started it)
+async function preloadRest(my) {
+  const n = cur.ds.steps.length;
+  for (let j = 0; j < n; j++) {
+    if (cur.tex[j]) continue;
+    status.textContent = `Loading ${cur.ds.label.toLowerCase()} data: ${cur.ready}/${n} ${cur.ds.stepLabels[j]}…`;
+    let d;
+    try { d = await data.loadStep(cur.name, cur.ds.steps[j]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
+    if (my !== loadToken) return;
+    addStep(j, d);
+    await nextFrame();
+    if (my !== loadToken) return;
+  }
+  syncStepUi();
+  showHists();
+  status.textContent = HELP;
+}
+// switch dataset (loads step k first and shows it; the other steps follow in the background)
+async function selectDataset(name, k = 0) {
   const my = ++loadToken, ds = meta.datasets[name];
   status.textContent = `Loading ${ds.label} ${ds.stepLabels[k]}…`;
   let d;
   try { d = await data.loadStep(name, ds.steps[k]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
   if (my !== loadToken) return;
+  resetVolumes();
   Object.assign(cur, { name, k, ds, nz: d.nz });
-  uploadVolume(d);
-  panel.setHists(buildHists(d, panelMeta()));
+  addStep(k, d);
   syncStepUi();
+  showHists();
   applyControls();
-  status.textContent = HELP;
+  if (cur.ds.steps.length > 1) preloadRest(my); else status.textContent = HELP;
 }
-dsSel.addEventListener('change', () => showStep(dsSel.value, 0));
-stepEl.addEventListener('input', () => { $('stepLabel').textContent = cur.ds.stepLabels[+stepEl.value] ?? ''; });
-stepEl.addEventListener('change', () => showStep(cur.name, +stepEl.value));
+dsSel.addEventListener('change', () => selectDataset(dsSel.value, 0));
+stepEl.addEventListener('input', () => setStep(+stepEl.value));
 syncStepUi();
 
 // ---------- save / load ----------
@@ -332,9 +378,10 @@ $('file').onchange = async (e) => {
     for (const [id, v] of Object.entries(s.controls)) checks.includes(id) ? ($(id).checked = v) : ($(id).value = v);
     Object.assign(cam, structuredClone(HOME), s.camera);
     const want = s.data;
-    if (want && meta.datasets[want.dataset] && (want.dataset !== cur.name || want.step !== cur.k)) {
-      dsSel.value = want.dataset;
-      await showStep(want.dataset, Math.min(want.step, meta.datasets[want.dataset].steps.length - 1));
+    if (want && meta.datasets[want.dataset]) {
+      const k = Math.min(want.step, meta.datasets[want.dataset].steps.length - 1);
+      if (want.dataset !== cur.name) { dsSel.value = want.dataset; await selectDataset(want.dataset, k); }
+      else setStep(k);
     }
     applyControls();
     panel.setSelection(s.rects ?? [], s.curve ?? []);
@@ -363,6 +410,8 @@ function render(now) {
   gl.uniform3fv(U.uEye, eye); gl.uniform3fv(U.uFwd, fwd); gl.uniform3fv(U.uRight, right); gl.uniform3fv(U.uUp, up);
   gl.uniform1f(U.uTan, TAN);
   gl.uniform1f(U.uAspect, w / h);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_3D, cur.tex[cur.k]);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
@@ -383,5 +432,5 @@ applyTheme();
 // starting selection: warm salty box plus a thermocline-like curve
 panel.setSelection([{ s0: 0.8, s1: 1, t0: 0.55, t1: 1, color: [214, 48, 49] }], [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]]);
 applyControls();
-status.textContent = HELP;
+if (cur.ds.steps.length > 1) preloadRest(loadToken); else status.textContent = HELP;
 render(performance.now());
