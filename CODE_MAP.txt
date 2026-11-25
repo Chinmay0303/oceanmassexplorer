@@ -276,3 +276,13 @@ PART 13. CHANGES AFTER PART 12 (preload, playback, diagram pairs)  -- names are 
  13.9 main.js save/load       saves pair + selections of all pairs + dataset/step; loads old rects/curve as T-S.
  Interaction map additions: Play/Pause/Space/speed/blend/loop -> 13.3 -> render() 13.4 -> uBlend, textures A/B -> vol() in shader;
  Diagram select -> panel.setPair -> uploadSelection (uPair, region texture, SDF) -> sampleST in shader.
+
+=================================================================================
+PART 14. COLOUR MAPS (plan step 1 of D23 in log.md)
+=================================================================================
+ 14.1 tools/gen_colormaps.py     samples cmocean/matplotlib maps -> src/colormap-stops.js (generated, 32 stops per map).
+ 14.2 src/colormaps.js           FIELD_DEFAULT (thermal/haline/oxy), CHOICES (dropdown), mapName(), colorAt(), colormapTable().
+                                 colorAt() is also what legends will use (step 2).
+ 14.3 main.js updateColormap()   re-uploads the 256x1 table (texture unit 2) when field or "Colour map" changes; called from applyControls.
+ 14.4 index.html #cmap           "Colour map" select in the Volume group; value saved with the config (listed in `ids`).
+ Replaces 3.6 (old fixed viridis-like table). The shader is unchanged: uTF1 still holds the table.

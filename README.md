@@ -45,7 +45,8 @@ If the data is missing, the app falls back to the old annual temperature/salinit
   then the month slider, Play/Pause (also Space), speed, month blending and looping become available.
 - **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen, then drag to draw a rectangle
   (region) or a curve (fiber surface). Every diagram keeps its own selections; the 3D view shows the chosen diagram's.
-- **Volume**: 1D transfer function mode can colour by temperature, salinity or oxygen.
+- **Volume**: 1D transfer function mode can colour by temperature, salinity or oxygen, each with its oceanographic colour map
+  (thermal, haline, oxy); Viridis or Cividis can be chosen instead.
 - Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.
 
 ## More
