@@ -7,13 +7,17 @@ void main() {
 }`;
 
 export const MAX_CURVE = 64;
-export const MAX_RECTS = 8;
+export const MAX_RECTS = 8;     // rectangles in total, across all diagrams
+export const MAX_CURVES = 4;    // curves in total, across all diagrams
+// Channels of the volume texture (0 = T, 1 = S, 2 = O2) that form the (x, y) axes of each diagram: T-S, T-O2, S-O2
+export const PAIR_CHANNELS = [[1, 0], [2, 0], [2, 1]];
 
 // World box: x = lon in [-1,1], z = lat in [-0.5,0.5] (north = -z), y = depth in [-d,d] (surface = +d).
 // Texture coords: (u, v, w) = (lon, lat, depth level index), all in [0,1].
 export const FRAG = `#version 300 es
 precision highp float;
 precision highp sampler3D;
+precision highp sampler2DArray;
 in vec2 vUv;
 out vec4 outColor;
 
@@ -21,29 +25,31 @@ uniform sampler3D uVol;   // r = normalised T, g = normalised S, b = normalised 
 uniform sampler3D uVolB;  // next time step, blended in when animating
 uniform float uBlend;     // 0 = uVol only, 1 = uVolB only
 uniform sampler2D uTF1;   // 1D colour map along x
-uniform sampler2D uTF2;   // T-S region transfer function: x = S, y = T
-uniform sampler2D uSDF;   // signed distance to the T-S curve (r), 1 where the nearest point is an endpoint (g)
+uniform sampler2DArray uTF2;  // region transfer function, one layer per diagram: x / y = the diagram's two axes
+uniform sampler2DArray uSDF;  // one layer per curve: signed distance to the curve in its diagram (r), 1 where the nearest point is an endpoint (g)
 
 uniform vec3 uEye, uRight, uUp, uFwd;
 uniform float uTan, uAspect, uD;
 uniform vec3 uClipMin, uClipMax;
-uniform int uMode;        // 0 = 1D transfer function, 1 = T-S regions
-uniform ivec2 uPair;      // channels of uVol that form the diagram's (x, y): (1,0) = (S,T), (2,0) = (O2,T), (2,1) = (O2,S)
+uniform bool uTF1D;       // colour the ocean by one field (1D transfer function)
 uniform int uField;       // 0 = T, 1 = S, 2 = O2 (1D mode); indexes the channels of uVol
 uniform vec2 uWin;
 uniform float uOpacity;
 uniform float uContext;  // strength of the lit background ocean body
 uniform int uNCurve;
+uniform vec3 uCurveColor[${MAX_CURVES}];
+uniform int uCurvePair[${MAX_CURVES}];   // diagram (0 T-S, 1 T-O2, 2 S-O2) of each curve
 uniform float uSlice;     // depth texture coordinate of the slice, < 0 = off
-uniform bool uFiber;
-uniform bool uRegions;    // show the T-S rectangles
-uniform bool uFill;       // also fill the rectangles as a volume (T-S transfer function)
+uniform int uFillMask;    // bit k set: rectangles of diagram k are drawn as a volume (uTF2 layer k)
 uniform int uNRect;
-uniform vec4 uRect[${MAX_RECTS}];       // closed control polygons: centre (S, T), half size
+uniform vec4 uRect[${MAX_RECTS}];       // rectangles drawn as surfaces: centre (x, y) and half size in their diagram
 uniform vec3 uRectColor[${MAX_RECTS}];
+uniform int uRectPair[${MAX_RECTS}];    // diagram of each rectangle
 uniform float uBand;
-uniform vec3 uFiberColor;
+uniform int uSteps;       // ray-march steps (quality setting), at most MAXSTEPS
 uniform vec3 uBg, uLand, uEdge;  // theme colours: background, land (slice mode), box edges
+uniform bool uPick;       // picking pass: write the first ocean sample under uPickNdc into 4 pixels instead of colours
+uniform vec2 uPickNdc;
 
 // palette: tertiary / secondary / primary
 const vec3 OCEAN_LIGHT = vec3(0.110, 0.639, 0.925);
@@ -61,35 +67,69 @@ vec3 toTex(vec3 p) { return vec3(p.x * 0.5 + 0.5, 0.5 - p.z, 0.5 - p.y / (2.0 * 
 
 bool inClip(vec3 tc) { return all(greaterThanEqual(tc, uClipMin)) && all(lessThanEqual(tc, uClipMax)); }
 
-// (x, y) of the active diagram pair at tc, false on land
-bool sampleST(vec3 tc, out vec2 st) {
-  vec4 v = vol(tc);
-  if (v.a < 0.5) return false;
-  st = vec2(v[uPair.x], v[uPair.y]);
-  return true;
+const ivec2 PAIR_CH[3] = ivec2[3](${PAIR_CHANNELS.map(([x, y]) => `ivec2(${x}, ${y})`).join(', ')});
+
+// the (x, y) values of diagram k at volume sample v
+vec2 stOf(vec4 v, int k) { ivec2 c = PAIR_CH[k]; return vec2(v[c.x], v[c.y]); }
+
+// volume sample at tc; false on land
+bool sampleV(vec3 tc, out vec4 v) {
+  v = vol(tc);
+  return v.a >= 0.5;
 }
 
-// Signed distance from st to the T-S curve; 'edge' is set when the nearest point is an endpoint
+// Signed distance from st to curve slot c; 'edge' is set when the nearest point is an endpoint
 // (the sign is meaningless there).
-float curveDist(vec2 st, out bool edge) {
-  vec2 q = texture(uSDF, st).rg;
+float curveDist(vec2 st, int c, out bool edge) {
+  vec2 q = texture(uSDF, vec3(st, float(c))).rg;
   edge = q.g > 0.5;
   return q.r;
 }
 
-// signed distance (negative inside) to rectangle i, a closed control polygon in (S, T)
+// signed distance (negative inside) to rectangle i in its diagram
 float sdBox(vec2 st, int i) {
   vec4 b = uRect[i];
   vec2 q = abs(st - b.xy) - b.zw;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
 }
 
-// which < 0: the curve; otherwise rectangle 'which'
-bool fiberAt(vec3 p, int which, out float f) {
-  vec2 st; bool e;
-  if (!sampleST(toTex(p), st)) return false;
-  f = which < 0 ? curveDist(st, e) : sdBox(st, which);
+// signed distance of selection id at sample v: id < MAX_RECTS is a rectangle, otherwise curve id - MAX_RECTS.
+// 'edge' is set when the nearest point of a curve is an endpoint (the sign is meaningless there).
+float selDistE(vec4 v, int id, out bool edge) {
+  edge = false;
+  if (id < ${MAX_RECTS}) return sdBox(stOf(v, uRectPair[id]), id);
+  int c = id - ${MAX_RECTS};
+  return curveDist(stOf(v, uCurvePair[c]), c, edge);
+}
+float selDist(vec4 v, int id) {
+  bool e;
+  return selDistE(v, id, e);
+}
+
+bool fiberAt(vec3 p, int id, out float f) {
+  vec4 v;
+  if (!sampleV(toTex(p), v)) return false;
+  f = selDist(v, id);
   return true;
+}
+
+// Fiber surface point between the ray samples pa and pb whose distances to selection id have different signs (fa at pa):
+// bisection on the distance along the segment. Returns false when the root is not a real surface point: a curve's
+// signed distance also flips sign across its medial axis (e.g. inside a sharp kink), where the distance at the root
+// is not ~0. Rectangle distances are continuous, so every sign change is a true crossing.
+bool refineHit(vec3 pa, vec3 pb, float fa, int id, out vec3 ph) {
+  float sa = sign(fa), fm = 0.0;
+  bool edge = false;
+  vec3 a = pa, b = pb;
+  for (int k = 0; k < 7; k++) {
+    vec3 m = 0.5 * (a + b);
+    vec4 vm;
+    if (!sampleV(toTex(m), vm)) { ph = m; return false; }  // land between the samples: nothing to draw
+    fm = selDistE(vm, id, edge);
+    if (fm * sa > 0.0) a = m; else b = m;
+  }
+  ph = 0.5 * (a + b);
+  return id < ${MAX_RECTS} || (!edge && abs(fm) < 0.01);
 }
 
 // 1 inside the visible ocean, 0 elsewhere (land, clipped away, outside the box)
@@ -108,22 +148,76 @@ vec3 fiberShade(vec3 n, vec3 rd, vec3 base) {
   return base * (0.35 + 0.65 * diff) + vec3(0.4) * pow(diff, 24.0);
 }
 
-vec3 fiberNormal(vec3 p, int which) {
+vec3 fiberNormal(vec3 p, int id) {
   const float e = 0.01;
   vec3 g = vec3(0.0);
   for (int i = 0; i < 3; i++) {
     vec3 o = vec3(i == 0, i == 1, i == 2) * e;
     float a, b;
-    bool oa = fiberAt(p + o, which, a), ob = fiberAt(p - o, which, b);
+    bool oa = fiberAt(p + o, id, a), ob = fiberAt(p - o, id, b);
     g[i] = (oa ? a : 0.0) - (ob ? b : 0.0);
   }
   return normalize(g + 1e-9);
 }
 
+// 16-bit value -> two bytes (as 0..1 colour channels)
+vec2 pack16(float x) {
+  float v = floor(clamp(x, 0.0, 1.0) * 65535.0 + 0.5);
+  return vec2(floor(v / 256.0), mod(v, 256.0)) / 255.0;
+}
+
+// Picking pass, drawn into a 4 x 1 RGBA8 target: pixel 0 = texture coords u, v; 1 = w, T; 2 = S, O2; 3 = found flag.
+// The sample is the first ocean voxel along the ray (the surface of the ocean body), or the slice plane in slice mode.
+vec4 pickOut(vec3 ro, vec3 rd, vec3 h) {
+  int slot = int(gl_FragCoord.x);
+  bool found = false;
+  vec3 tcH = vec3(0.0);
+  vec4 vH = vec4(0.0);
+  if (uSlice >= 0.0) {
+    float y = uD * (1.0 - 2.0 * uSlice);
+    float ts = (y - ro.y) / rd.y;
+    vec3 p = ro + rd * ts, tc = toTex(p);
+    vec4 v;
+    if (ts > 0.0 && abs(p.x) <= 1.0 && abs(p.z) <= 0.5 && inClip(tc) && sampleV(tc, v)) { found = true; tcH = tc; vH = v; }
+  } else {
+    vec3 inv = 1.0 / rd, t0 = (-h - ro) * inv, t1 = (h - ro) * inv;
+    vec3 tmin = min(t0, t1), tmax = max(t0, t1);
+    float tn = max(max(tmin.x, tmin.y), max(tmin.z, 0.0)), tf = min(min(tmax.x, tmax.y), tmax.z);
+    if (tf > tn) {
+      float dt = (tf - tn) / 320.0, tPrev = tn;
+      for (int i = 0; i < 320; i++) {
+        float t = tn + dt * float(i);
+        vec3 tc = toTex(ro + rd * t);
+        vec4 v;
+        if (inClip(tc) && sampleV(tc, v)) {
+          float a = tPrev, b = t;  // bisection between the last empty sample and this one
+          for (int k = 0; k < 6; k++) {
+            float m = 0.5 * (a + b);
+            vec3 tm = toTex(ro + rd * m);
+            vec4 vm;
+            if (inClip(tm) && sampleV(tm, vm)) b = m; else a = m;
+          }
+          tcH = toTex(ro + rd * b);
+          sampleV(tcH, vH);
+          found = true;
+          break;
+        }
+        tPrev = t;
+      }
+    }
+  }
+  if (slot == 0) return vec4(pack16(tcH.x), pack16(tcH.y));
+  if (slot == 1) return vec4(pack16(tcH.z), pack16(vH.r));
+  if (slot == 2) return vec4(pack16(vH.g), pack16(vH.b));
+  return vec4(found ? 1.0 : 0.0, 0.0, 0.0, 1.0);
+}
+
 void main() {
-  vec3 rd = normalize(uFwd + vUv.x * uAspect * uTan * uRight + vUv.y * uTan * uUp);
+  vec2 uv = uPick ? uPickNdc : vUv;
+  vec3 rd = normalize(uFwd + uv.x * uAspect * uTan * uRight + uv.y * uTan * uUp);
   vec3 ro = uEye;
   vec3 h = vec3(1.0, uD, 0.5);
+  if (uPick) { outColor = pickOut(ro, rd, h); return; }
 
   vec3 bg = uBg;
 
@@ -135,28 +229,29 @@ void main() {
     vec2 fw = fwidth(gr);
     vec3 col = bg;
     vec3 tc = toTex(p);
-    vec2 st;
+    vec4 v;
     if (ts > 0.0 && abs(p.x) <= 1.0 && abs(p.z) <= 0.5) {
       col = uLand;
-      if (inClip(tc) && sampleST(tc, st)) {
+      if (inClip(tc) && sampleV(tc, v)) {
         col = OCEAN_MID;
-        if (uMode == 0) {
-          float w = (vol(tc)[uField] - uWin.x) / (uWin.y - uWin.x);
+        if (uTF1D) {
+          float w = (v[uField] - uWin.x) / (uWin.y - uWin.x);
           if (w >= 0.0 && w <= 1.0) col = texture(uTF1, vec2(w, 0.5)).rgb;
-        } else {
-          vec4 c = uRegions && uFill ? texture(uTF2, st) : vec4(0.0);
+        }
+        for (int k = 0; k < 3; k++) {  // rectangle volumes, per diagram
+          if (((uFillMask >> k) & 1) == 0) continue;
+          vec4 c = texture(uTF2, vec3(stOf(v, k), float(k)));
           col = mix(col, c.rgb, c.a * 0.9);
         }
-        if (uRegions) {  // rectangle outlines: the fiber surfaces cut by the slice
-          for (int i = 0; i < ${MAX_RECTS}; i++) {
-            if (i >= uNRect) break;
-            col = mix(uRectColor[i], col, smoothstep(uBand * 0.5, uBand * 1.5, abs(sdBox(st, i))));
-          }
+        for (int i = 0; i < ${MAX_RECTS}; i++) {  // rectangle outlines: the fiber surfaces cut by the slice
+          if (i >= uNRect) break;
+          col = mix(uRectColor[i], col, smoothstep(uBand * 0.5, uBand * 1.5, abs(sdBox(stOf(v, uRectPair[i]), i))));
         }
-        if (uFiber && uNCurve > 1) {
+        for (int ci = 0; ci < ${MAX_CURVES}; ci++) {
+          if (ci >= uNCurve) break;
           bool e;
-          float f = abs(curveDist(st, e));
-          if (!e) col = mix(uFiberColor, col, smoothstep(uBand * 0.5, uBand * 1.5, f));
+          float f = abs(curveDist(stOf(v, uCurvePair[ci]), ci, e));
+          if (!e) col = mix(uCurveColor[ci], col, smoothstep(uBand * 0.5, uBand * 1.5, f));
         }
         col = withGrid(col, gr, fw);
       }
@@ -171,62 +266,73 @@ void main() {
   float tn = max(max(tmin.x, tmin.y), max(tmin.z, 0.0)), tf = min(min(tmax.x, tmax.y), tmax.z);
   if (tf <= tn) { outColor = vec4(bg, 1.0); return; }
 
-  const int STEPS = 320;
-  float dt = (tf - tn) / float(STEPS);
+  const int MAXSTEPS = 640;
+  float dt = (tf - tn) / float(uSteps);
   float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float t = tn + dt * jitter;
 
   vec4 acc = vec4(0.0);
   bool hit = false; vec3 hitP = ro;  // first ocean sample: surface of the background ocean body
-  float fPrev = 0.0; bool prevOk = false, prevEdge = true;
+  bool prevOk = false;
   vec3 pPrev = ro;
-  vec2 stPrev = vec2(0.0);
+  float fpc[${MAX_CURVES}], fpe[${MAX_CURVES}];  // previous curve distances / endpoint flags (per curve slot)
+  float fpr[${MAX_RECTS}];                       // previous rectangle distances
+  for (int j = 0; j < ${MAX_CURVES}; j++) { fpc[j] = 0.0; fpe[j] = 1.0; }
+  for (int j = 0; j < ${MAX_RECTS}; j++) fpr[j] = 0.0;
 
-  for (int i = 0; i < STEPS; i++) {
+  for (int i = 0; i < MAXSTEPS; i++) {
+    if (i >= uSteps) break;
     vec3 p = ro + rd * t;
     vec3 tc = toTex(p);
-    vec2 st;
-    bool ok = inClip(tc) && sampleST(tc, st);
+    vec4 v;
+    bool ok = inClip(tc) && sampleV(tc, v);
     if (ok) {
       if (!hit) { hit = true; hitP = p; }
       vec4 c = vec4(0.0);
-      if (uMode == 0) {
-        float v = vol(tc)[uField];
-        float w = (v - uWin.x) / (uWin.y - uWin.x);
+      if (uTF1D) {
+        float w = (v[uField] - uWin.x) / (uWin.y - uWin.x);
         if (w >= 0.0 && w <= 1.0) c = vec4(texture(uTF1, vec2(w, 0.5)).rgb, uOpacity);
-      } else {
-        c = uRegions && uFill ? texture(uTF2, st) : vec4(0.0);
-        c.a *= uOpacity;
+      }
+      for (int k = 0; k < 3; k++) {  // rectangle volumes of every diagram, on top of the 1D colouring ('over' operator)
+        if (((uFillMask >> k) & 1) == 0) continue;
+        vec4 r = texture(uTF2, vec3(stOf(v, k), float(k)));
+        r.a *= uOpacity;
+        float a0 = r.a + c.a * (1.0 - r.a);
+        if (a0 > 0.0) c.rgb = (r.rgb * r.a + c.rgb * c.a * (1.0 - r.a)) / a0;
+        c.a = a0;
       }
       float a = 1.0 - exp(-c.a * dt * 60.0);
       acc.rgb += (1.0 - acc.a) * a * c.rgb;
       acc.a += (1.0 - acc.a) * a;
 
-      if (uFiber && uNCurve > 1) {
+      for (int ci = 0; ci < ${MAX_CURVES}; ci++) {  // fiber surfaces of the curves: sign change of the distance between two samples
+        if (ci >= uNCurve) break;
         bool edge;
-        float f = curveDist(st, edge);
-        if (prevOk && !edge && !prevEdge && f * fPrev < 0.0 && abs(f) < uBand * 8.0 && abs(fPrev) < uBand * 8.0) {
-          vec3 ph = mix(pPrev, p, abs(fPrev) / (abs(fPrev) + abs(f)));
-          vec3 col = fiberShade(fiberNormal(ph, -1), rd, uFiberColor);
-          float fa = 0.9;
-          acc.rgb += (1.0 - acc.a) * fa * col;
-          acc.a += (1.0 - acc.a) * fa;
+        float f = curveDist(stOf(v, uCurvePair[ci]), ci, edge);
+        if (prevOk && !edge && fpe[ci] < 0.5 && f * fpc[ci] < 0.0 && abs(f) < 0.3 && abs(fpc[ci]) < 0.3) {
+          vec3 ph;
+          if (refineHit(pPrev, p, fpc[ci], ${MAX_RECTS} + ci, ph)) {
+            vec3 col = fiberShade(fiberNormal(ph, ${MAX_RECTS} + ci), rd, uCurveColor[ci]);
+            float fa = 0.9;
+            acc.rgb += (1.0 - acc.a) * fa * col;
+            acc.a += (1.0 - acc.a) * fa;
+          }
         }
-        fPrev = f; prevEdge = edge;
+        fpc[ci] = f; fpe[ci] = edge ? 1.0 : 0.0;
       }
-      if (uRegions && prevOk) {  // closed rectangles: same sign-change test as the curve
-        for (int i = 0; i < ${MAX_RECTS}; i++) {
-          if (i >= uNRect) break;
-          float f = sdBox(st, i), fp = sdBox(stPrev, i);
-          if (f * fp < 0.0 && abs(f) < uBand * 8.0 && abs(fp) < uBand * 8.0) {
-            vec3 ph = mix(pPrev, p, abs(fp) / (abs(fp) + abs(f)));
-            vec3 col = fiberShade(fiberNormal(ph, i), rd, uRectColor[i]);
+      for (int ri = 0; ri < ${MAX_RECTS}; ri++) {  // rectangle surfaces: same sign-change test
+        if (ri >= uNRect) break;
+        float f = sdBox(stOf(v, uRectPair[ri]), ri), fp = fpr[ri];
+        if (prevOk && f * fp < 0.0) {
+          vec3 ph;
+          if (refineHit(pPrev, p, fp, ri, ph)) {
+            vec3 col = fiberShade(fiberNormal(ph, ri), rd, uRectColor[ri]);
             acc.rgb += (1.0 - acc.a) * 0.9 * col;
             acc.a += (1.0 - acc.a) * 0.9;
           }
         }
+        fpr[ri] = f;
       }
-      stPrev = st;
       pPrev = p;
     }
     prevOk = ok;

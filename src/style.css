@@ -23,6 +23,9 @@ body { display: flex; overflow: hidden; font-size: 1rem; }
 #view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #stage { flex: 1; position: relative; min-height: 0; }
 #gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+#readout { position: absolute; top: 0.6rem; left: 0.6rem; max-width: 22rem; padding: 0.4rem 0.6rem; border: var(--border-width) solid var(--border); border-radius: var(--standard-border-radius); background: var(--bg); font-size: 0.85rem; line-height: 1.35; white-space: pre-line; pointer-events: none; }
+#readout b { font-weight: 600; }
+#pin { position: absolute; width: 14px; height: 14px; margin: -9px 0 0 -9px; border: 2px solid #fff; outline: 2px solid #000; border-radius: 50%; pointer-events: none; }
 #status { margin: 0; padding: 0.5rem 1rem; border-top: var(--border-width) solid var(--border); color: var(--text-light); font-size: 0.85rem; }
 
 #side { float: none; width: 25rem; margin: 0; padding: 1rem; border: 0; border-left: var(--border-width) solid var(--border); border-radius: 0; font-size: 0.95rem; overflow-y: auto; }
@@ -36,6 +39,20 @@ body { display: flex; overflow: hidden; font-size: 1rem; }
 .hint { color: var(--text-light); font-size: 0.85rem; }
 
 #ts { width: 100%; height: 18rem; display: block; margin-bottom: 0.5rem; border: var(--border-width) solid var(--border); border-radius: var(--standard-border-radius); cursor: crosshair; touch-action: none; }
+
+#histLegend { width: 100%; height: 1.9rem; display: block; margin-bottom: 0.5rem; }
+#cbar { width: 100%; height: 3.2rem; display: block; margin: 0.25rem 0 0.5rem; }
+
+.sellist { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.2rem; max-height: 15rem; overflow-y: auto; }
+.sel { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.35rem; align-items: center; padding: 0.15rem 0.3rem; border: 1px solid transparent; border-radius: var(--standard-border-radius); }
+.sel.on { border-color: var(--accent); background: var(--accent-bg); }
+.sel .name, .sel .name:hover, .sel .name:focus, .sel .name:active { background: none; color: var(--text); }
+.sel .name { display: flex; align-items: center; gap: 0.4rem; margin: 0; padding: 0.15rem 0.25rem; border: 0; background: none; color: var(--text); font-size: 0.9rem; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sel .sw { flex: none; width: 0.85rem; height: 0.85rem; border: 1px solid var(--border); border-radius: 3px; }
+.sel select { width: auto; margin: 0; padding: 0.1rem 1.6rem 0.1rem 0.3rem; font-size: 0.85rem; }
+.sel input[type=checkbox] { margin: 0; }
+.sel .del { margin: 0; padding: 0 0.5rem; border: 1px solid var(--border); background: none; color: var(--text); }
+.sellist .empty { padding: 0.3rem; color: var(--text-light); font-size: 0.85rem; }
 
 .field { display: grid; grid-template-columns: 6.5rem 1fr; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
 .field.value { grid-template-columns: 6.5rem 1fr 4rem; }

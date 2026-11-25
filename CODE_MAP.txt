@@ -276,3 +276,66 @@ PART 13. CHANGES AFTER PART 12 (preload, playback, diagram pairs)  -- names are 
  13.9 main.js save/load       saves pair + selections of all pairs + dataset/step; loads old rects/curve as T-S.
  Interaction map additions: Play/Pause/Space/speed/blend/loop -> 13.3 -> render() 13.4 -> uBlend, textures A/B -> vol() in shader;
  Diagram select -> panel.setPair -> uploadSelection (uPair, region texture, SDF) -> sampleST in shader.
+
+=================================================================================
+PART 14. COLOUR MAPS (plan step 1 of D23 in log.md)
+=================================================================================
+ 14.1 tools/gen_colormaps.py     samples cmocean/matplotlib maps -> src/colormap-stops.js (generated, 32 stops per map).
+ 14.2 src/colormaps.js           FIELD_DEFAULT (thermal/haline/oxy), CHOICES (dropdown), mapName(), colorAt(), colormapTable().
+                                 colorAt() is also what legends will use (step 2).
+ 14.3 main.js updateColormap()   re-uploads the 256x1 table (texture unit 2) when field or "Colour map" changes; called from applyControls.
+ 14.4 index.html #cmap           "Colour map" select in the Volume group; value saved with the config (listed in `ids`).
+ Replaces 3.6 (old fixed viridis-like table). The shader is unchanged: uTF1 still holds the table.
+
+=================================================================================
+PART 15. LEGENDS AND SELECTIONS (steps 2-4 of D23 in log.md)
+=================================================================================
+ 15.1 src/legend.js             drawColorbar(): colour bar with real-unit ticks for the 1D transfer function (#cbar).
+ 15.2 ts.js legends             axis colour strips and drawLegend() (#histLegend, histogram colours); histRamp(); niceTicks() exported.
+ 15.3 ts.js selection model     items[] (rect/curve) with add(), remove(), clearAll(), select(), setVisible(), setStyle(), edit();
+                                PALETTE + nextColor(); getters rects, surfaceRects, volumeRects, curveItem; getSelections()/setSelections().
+ 15.4 ts.js Select tool         hitTest(), editDrag() (move / corner resize), down()/move()/up() for the three tools, setTool(), hover cursors.
+                                3D is updated once when a drag ends. Replaces 5.5-5.7 (clear() is gone).
+ 15.5 src/selections-ui.js      renderSelections(): the sidebar list; forwards clicks to panel methods.
+ 15.6 main.js                   renderList()/onSelect wiring, uploadSelection() (surface rects -> uRect*, volume rects -> region texture + uFill,
+                                first visible curve -> SDF + colour), Delete all button, Delete/Backspace key, tf1d checkbox in applyControls,
+                                migrateSelections() for old save formats. Replaces the global fiber/regions/fill controls.
+ 15.7 shaders.js                uTF1D (bool) replaces uMode; uFill = some rectangles drawn as volume; uRegions/uFiber removed; 1D colouring and
+                                rectangle volumes combine with the 'over' operator; MAX_CURVES = 4 (not used by the shader until step 5).
+ 15.8 index.html / style.css    tools Rectangle/Curve/Select, #selList, Delete all, 1D checkbox, #cbar, #histLegend, .sel* styles.
+ Interaction map additions: Select tool drag -> ts.js editDrag (L2/L3) -> onChange at drag end -> uploadSelection (L4) -> shader (L5);
+ list buttons -> panel methods -> same path; Delete key -> panel.deleteSelected().
+
+=================================================================================
+PART 16. ALL DIAGRAMS AT ONCE (step 5 of D23)
+=================================================================================
+ 16.1 shaders.js PAIR_CHANNELS, PAIR_CH, stOf(), sampleV()   diagram k reads channels PAIR_CHANNELS[k] of the volume sample (replaces uPair, sampleST).
+ 16.2 shaders.js uRectPair / uCurvePair / uCurveColor         per-selection diagram index and colour; uFillMask (bit k = diagram k has volume rectangles).
+ 16.3 shaders.js uSDF, uTF2 (sampler2DArray)                  curve distance layers (slot = i-th visible curve), region transfer function layers (layer = diagram).
+ 16.4 shaders.js selDist()/fiberAt()/fiberNormal(p, id)       id < MAX_RECTS = rectangle, else curve id - MAX_RECTS. March loop keeps previous distances per
+                                                              selection in local arrays (fpr, fpc, fpe); loops over curves, then rectangles, per ray step.
+ 16.5 ts.js PAIRS.index, PAIR_KEYS, surfaceRects, volumeRectsOf(pair), curves, regionTF(pair)   what the 3D view draws (all diagrams).
+ 16.6 main.js tf2/sdfTex arrays, sdfKeys, sdfCache, uploadSelection()   uploads region layers, changed curve layers (cached) and the rectangle/curve uniforms.
+ Replaces 3.7-3.9 and the single-curve parts of 6.10/6.11/7.2.
+
+=================================================================================
+PART 17. PICKING (step 6)
+=================================================================================
+ 17.1 shaders.js pickOut(), uPick/uPickNdc, pack16()   picking pass: first ocean sample (or slice plane) under the cursor -> 4 pixels.
+ 17.2 main.js pickFbo, pickRaw(), pickAt()             draws the pass into a 4x1 RGBA8 framebuffer, reads it back, decodes it.
+ 17.3 main.js pointerdown/pointerup                    a click (left button, < 4 px movement, no Shift) calls pickAt().
+ 17.4 main.js showProbe()/clearProbe()/updatePin()     readout text (#readout), selections containing the point, pin (#pin) projected from the camera
+                                                       each frame, panel.setProbe(). Cleared by Esc, empty click, dataset or month change.
+ 17.5 ts.js probe / setProbe()                         ring + cross drawn in the active diagram at the picked point.
+ 17.6 data.js dlon                                     grid step in longitude, needed for the lat/lon readout.
+ Interaction map addition: click in 3D -> 17.3 -> 17.2 (L4) -> shader pass (L5) -> 17.4 -> diagram marker (L2/L3).
+
+=================================================================================
+PART 18. FIBER REFINEMENT AND QUALITY (step 7)
+=================================================================================
+ 18.1 shaders.js selDistE()/selDist()      signed distance of a selection at a sample (+ endpoint flag for curves).
+ 18.2 shaders.js refineHit()               7-step bisection along the ray segment between two samples with different signs; rejects land and, for curves,
+                                           roots with |distance| >= 0.01 or at an endpoint.
+ 18.3 shaders.js march loop                curve hits (pre-filter |f| < 0.3) and rectangle hits (no gate) go through refineHit() before shading.
+ 18.4 shaders.js uSteps / MAXSTEPS         ray-march step count from the Quality select; index.html #quality, main.js applyControls (saved in `ids`).
+ Replaces the linear-interpolated hits of 6.10/6.11 (see 16.4 for the surrounding loop).
