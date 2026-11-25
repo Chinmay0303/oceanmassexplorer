@@ -30,7 +30,8 @@ function fromWoa23(m) {
     legacy: false, source: m.source, span: m.span_years,
     nx: m.nx, ny: m.ny, lat0: m.lat0, dlat: m.dlat, lon0: m.lon0,
     fields: m.fields, names: m.fields.map((f) => NAMES[f]), units: m.fields.map((f) => UNITS[f]),
-    ranges: m.ranges, datasets: m.datasets,
+    ranges: m.ranges,
+    datasets: Object.fromEntries(Object.entries(m.datasets).map(([k, d]) => [k, { ...d, stepLabels: d.step_labels }])),
   };
 }
 
