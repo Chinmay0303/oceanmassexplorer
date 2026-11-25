@@ -135,7 +135,7 @@ function curveSDF(curve) {
   return out;
 }
 
-gl.uniform1i(U.uVol, 0); gl.uniform1i(U.uTF1, 2); gl.uniform1i(U.uTF2, 3); gl.uniform1i(U.uSDF, 4);
+gl.uniform1i(U.uVol, 0); gl.uniform1i(U.uVolB, 5); gl.uniform1i(U.uTF1, 2); gl.uniform1i(U.uTF2, 3); gl.uniform1i(U.uSDF, 4);
 gl.uniform3fv(U.uFiberColor, CURVE_RGB.map((c) => c / 255));
 gl.uniform1f(U.uBand, 0.01);
 
@@ -301,19 +301,37 @@ function syncStepUi() {
   $('stepRow').hidden = ds.steps.length < 2;
   stepEl.max = ds.steps.length - 1;
   stepEl.value = cur.k;
+  $('animRow').hidden = ds.steps.length < 2;
+  playBtn.disabled = cur.ready < ds.steps.length;
   stepEl.disabled = cur.ready < ds.steps.length;  // steps are selectable once all are on the GPU
   $('stepLabel').textContent = ds.stepLabels[cur.k];
   $('sliceDepth').max = cur.nz - 1;
   $('sliceDepth').value = Math.min(+$('sliceDepth').value, cur.nz - 1);
 }
+// ---- playback: pos = position in steps (fractional while blending); cur.k = nearest step, shown in UI/diagram ----
+const anim = { playing: false, pos: 0 };
+const playBtn = $('play');
+function setPlaying(on) {
+  anim.playing = on && cur.ready === cur.ds.steps.length && cur.ds.steps.length > 1;
+  if (!anim.playing) anim.pos = cur.k;  // stop on an exact step
+  playBtn.textContent = anim.playing ? 'Pause' : 'Play';
+  redraw();
+}
+playBtn.addEventListener('click', () => setPlaying(!anim.playing));
+addEventListener('keydown', (e) => {
+  if (e.key === ' ' && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target.tagName)) { e.preventDefault(); setPlaying(!anim.playing); }
+});
+$('smooth').addEventListener('input', redraw);
+
 let loadToken = 0;
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 const showHists = () => panel.setHists(cur.hists[cur.k], cur.histMax);
 
 // show step k of the current dataset (must be loaded)
-function setStep(k) {
+function setStep(k, setPos = true) {
   if (!cur.tex[k]) return;
   cur.k = k;
+  if (setPos) anim.pos = k;
   stepEl.value = k;
   $('stepLabel').textContent = cur.ds.stepLabels[k];
   showHists();
@@ -339,12 +357,14 @@ async function preloadRest(my) {
 // switch dataset (loads step k first and shows it; the other steps follow in the background)
 async function selectDataset(name, k = 0) {
   const my = ++loadToken, ds = meta.datasets[name];
+  setPlaying(false);
   status.textContent = `Loading ${ds.label} ${ds.stepLabels[k]}…`;
   let d;
   try { d = await data.loadStep(name, ds.steps[k]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
   if (my !== loadToken) return;
   resetVolumes();
   Object.assign(cur, { name, k, ds, nz: d.nz });
+  anim.pos = k;
   addStep(k, d);
   syncStepUi();
   showHists();
@@ -395,8 +415,17 @@ $('file').onchange = async (e) => {
 let lastT = 0;
 function render(now) {
   requestAnimationFrame(render);
-  moveByKeys(Math.min((now - lastT) / 1000, 0.1));
+  const dt = Math.min((now - lastT) / 1000, 0.1);
   lastT = now;
+  moveByKeys(dt);
+  const n = cur.ds.steps.length, loop = $('loop').checked;
+  if (anim.playing) {
+    anim.pos += dt * +$('speed').value;
+    if (anim.pos >= n) { if (loop) anim.pos %= n; else { anim.pos = n - 1; setPlaying(false); } }
+    const k = Math.round(anim.pos) % n;
+    if (k !== cur.k) setStep(k, false);
+    interact();  // half resolution while playing, full resolution after pausing
+  }
   const sc = now - lastInteract < 200 ? 0.5 : 1;
   if (sc !== lastScale) { lastScale = sc; dirty = true; }
   const dpr = Math.min(devicePixelRatio || 1, 2) * sc;
@@ -410,8 +439,16 @@ function render(now) {
   gl.uniform3fv(U.uEye, eye); gl.uniform3fv(U.uFwd, fwd); gl.uniform3fv(U.uRight, right); gl.uniform3fv(U.uUp, up);
   gl.uniform1f(U.uTan, TAN);
   gl.uniform1f(U.uAspect, w / h);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_3D, cur.tex[cur.k]);
+  // volumes: A = current step, B = next step (only sampled while blending)
+  let a = cur.k, b = cur.k, blend = 0;
+  if (anim.playing && $('smooth').checked) {
+    a = Math.floor(anim.pos) % n;
+    b = loop ? (a + 1) % n : Math.min(a + 1, n - 1);
+    blend = anim.pos - Math.floor(anim.pos);
+  }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_3D, cur.tex[a]);
+  gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_3D, cur.tex[b]);
+  gl.uniform1f(U.uBlend, blend);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }

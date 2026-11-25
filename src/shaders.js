@@ -18,6 +18,8 @@ in vec2 vUv;
 out vec4 outColor;
 
 uniform sampler3D uVol;   // r = normalised T, g = normalised S, b = normalised O2, a = 1 on ocean
+uniform sampler3D uVolB;  // next time step, blended in when animating
+uniform float uBlend;     // 0 = uVol only, 1 = uVolB only
 uniform sampler2D uTF1;   // 1D colour map along x
 uniform sampler2D uTF2;   // T-S region transfer function: x = S, y = T
 uniform sampler2D uSDF;   // signed distance to the T-S curve (r), 1 where the nearest point is an endpoint (g)
@@ -47,13 +49,20 @@ const vec3 OCEAN_LIGHT = vec3(0.110, 0.639, 0.925);
 const vec3 OCEAN_MID = vec3(0.137, 0.537, 0.855);
 const vec3 OCEAN_DEEP = vec3(0.059, 0.369, 0.612);
 
+// volume lookup; between two time steps both are sampled and mixed (one fetch when not blending)
+vec4 vol(vec3 tc) {
+  vec4 a = texture(uVol, tc);
+  if (uBlend > 0.0) a = mix(a, texture(uVolB, tc), uBlend);
+  return a;
+}
+
 vec3 toTex(vec3 p) { return vec3(p.x * 0.5 + 0.5, 0.5 - p.z, 0.5 - p.y / (2.0 * uD)); }
 
 bool inClip(vec3 tc) { return all(greaterThanEqual(tc, uClipMin)) && all(lessThanEqual(tc, uClipMax)); }
 
 // (S, T) at tc, false on land
 bool sampleST(vec3 tc, out vec2 st) {
-  vec4 v = texture(uVol, tc);
+  vec4 v = vol(tc);
   if (v.a < 0.5) return false;
   st = v.gr;
   return true;
@@ -85,7 +94,7 @@ bool fiberAt(vec3 p, int which, out float f) {
 // 1 inside the visible ocean, 0 elsewhere (land, clipped away, outside the box)
 float occupancy(vec3 p) {
   vec3 tc = toTex(p);
-  return inClip(tc) ? texture(uVol, tc).a : 0.0;
+  return inClip(tc) ? vol(tc).a : 0.0;
 }
 
 vec3 withGrid(vec3 col, vec2 gr, vec2 fw) {  // lat/lon grid every 30 degrees
@@ -131,7 +140,7 @@ void main() {
       if (inClip(tc) && sampleST(tc, st)) {
         col = OCEAN_MID;
         if (uMode == 0) {
-          float w = (texture(uVol, tc)[uField] - uWin.x) / (uWin.y - uWin.x);
+          float w = (vol(tc)[uField] - uWin.x) / (uWin.y - uWin.x);
           if (w >= 0.0 && w <= 1.0) col = texture(uTF1, vec2(w, 0.5)).rgb;
         } else {
           vec4 c = uRegions && uFill ? texture(uTF2, st) : vec4(0.0);
@@ -181,7 +190,7 @@ void main() {
       if (!hit) { hit = true; hitP = p; }
       vec4 c = vec4(0.0);
       if (uMode == 0) {
-        float v = texture(uVol, tc)[uField];
+        float v = vol(tc)[uField];
         float w = (v - uWin.x) / (uWin.y - uWin.x);
         if (w >= 0.0 && w <= 1.0) c = vec4(texture(uTF1, vec2(w, 0.5)).rgb, uOpacity);
       } else {

@@ -29,6 +29,12 @@
     <summary>Data</summary>
     <div class="field"><label for="dataset">Dataset</label><select id="dataset"></select></div>
     <div class="field value" id="stepRow" hidden><label for="step">Month</label><input id="step" type="range" min="0" max="0" step="1" value="0"><output id="stepLabel" for="step"></output></div>
+    <div id="animRow" hidden>
+      <div class="row"><button id="play" disabled>Play</button>
+        <select id="speed" aria-label="Playback speed"><option value="0.5">0.5 months/s</option><option value="1" selected>1 month/s</option><option value="2">2 months/s</option><option value="4">4 months/s</option></select></div>
+      <div class="check"><input id="smooth" type="checkbox" checked><label for="smooth">Blend between months</label></div>
+      <div class="check"><input id="loop" type="checkbox" checked><label for="loop">Loop (Dec → Jan)</label></div>
+    </div>
     <p class="hint" id="dataInfo"></p>
   </details>
 
