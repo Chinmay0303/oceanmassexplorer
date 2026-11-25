@@ -305,3 +305,15 @@ PART 15. LEGENDS AND SELECTIONS (steps 2-4 of D23 in log.md)
  15.8 index.html / style.css    tools Rectangle/Curve/Select, #selList, Delete all, 1D checkbox, #cbar, #histLegend, .sel* styles.
  Interaction map additions: Select tool drag -> ts.js editDrag (L2/L3) -> onChange at drag end -> uploadSelection (L4) -> shader (L5);
  list buttons -> panel methods -> same path; Delete key -> panel.deleteSelected().
+
+=================================================================================
+PART 16. ALL DIAGRAMS AT ONCE (step 5 of D23)
+=================================================================================
+ 16.1 shaders.js PAIR_CHANNELS, PAIR_CH, stOf(), sampleV()   diagram k reads channels PAIR_CHANNELS[k] of the volume sample (replaces uPair, sampleST).
+ 16.2 shaders.js uRectPair / uCurvePair / uCurveColor         per-selection diagram index and colour; uFillMask (bit k = diagram k has volume rectangles).
+ 16.3 shaders.js uSDF, uTF2 (sampler2DArray)                  curve distance layers (slot = i-th visible curve), region transfer function layers (layer = diagram).
+ 16.4 shaders.js selDist()/fiberAt()/fiberNormal(p, id)       id < MAX_RECTS = rectangle, else curve id - MAX_RECTS. March loop keeps previous distances per
+                                                              selection in local arrays (fpr, fpc, fpe); loops over curves, then rectangles, per ray step.
+ 16.5 ts.js PAIRS.index, PAIR_KEYS, surfaceRects, volumeRectsOf(pair), curves, regionTF(pair)   what the 3D view draws (all diagrams).
+ 16.6 main.js tf2/sdfTex arrays, sdfKeys, sdfCache, uploadSelection()   uploads region layers, changed curve layers (cached) and the rectangle/curve uniforms.
+ Replaces 3.7-3.9 and the single-curve parts of 6.10/6.11/7.2.

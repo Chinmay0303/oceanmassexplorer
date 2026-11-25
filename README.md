@@ -46,7 +46,7 @@ If the data is missing, the app falls back to the old annual temperature/salinit
 - **Water-mass diagram**: choose Temperature-Salinity, Temperature-Oxygen or Salinity-Oxygen. Tools: Rectangle and Curve draw
   (up to 8 rectangles and 4 curves), Select picks an item, drag moves it, a corner resizes a rectangle, the Delete key removes it.
   The list below the diagram shows every selection: choose how a rectangle is drawn in 3D (Surface, Volume or both), hide it, or delete it
-  (Delete all removes everything). The 3D view currently shows the selections of the chosen diagram.
+  (Delete all removes everything). The 3D view shows all ticked selections of every diagram together.
 - **Volume**: tick "Colour the ocean by one field" to colour by temperature, salinity or oxygen with its oceanographic colour map
   (thermal, haline, oxy; Viridis or Cividis can be chosen instead); a colour bar shows the values.
 - Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.
