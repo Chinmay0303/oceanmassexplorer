@@ -4,18 +4,23 @@ import { VERT, FRAG, MAX_CURVE, MAX_RECTS } from './shaders.js';
 import { TSPanel } from './ts.js';
 import { themeColors, CURVE_RGB } from './theme.js';
 
+import { openData } from './data.js';
+
 const $ = (id) => document.getElementById(id);
 const status = $('status');
-
-async function fetchBin(name, Type) {
-  const buf = await (await fetch(`data/${name}`)).arrayBuffer();
-  return new Type(buf);
-}
+const HELP = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · double-click: reset';
 
 // ---------- data ----------
-const meta = await (await fetch('data/meta.json')).json();
-const [tData, sData, mask] = await Promise.all([fetchBin('t.bin', Uint16Array), fetchBin('s.bin', Uint16Array), fetchBin('mask.bin', Uint8Array)]);
-const { nx, ny, nz } = meta;
+let data;
+try { data = await openData(); } catch (e) { status.textContent = 'Could not load ocean data: ' + e.message; throw e; }
+const meta = data.meta;
+const { nx, ny } = meta;
+const cur = { name: Object.keys(meta.datasets)[0], k: 0 };
+cur.ds = meta.datasets[cur.name];
+const first = await data.loadStep(cur.name, cur.ds.steps[0]);
+cur.nz = first.nz;
+// what the T-S panel needs to know about the loaded step
+const panelMeta = () => ({ nx, ny, nz: cur.ds.nz, depth: cur.ds.depth, lat0: meta.lat0, dlat: meta.dlat, ranges: meta.ranges });
 
 // ---------- GL ----------
 const canvas = $('gl');
@@ -51,18 +56,28 @@ function tex(target, unit, setup) {
   return t;
 }
 
-// volume: rgba16f = (T, S, ocean mask), uploaded one depth level at a time to keep memory low
-tex(gl.TEXTURE_3D, 0, () => {
-  gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, nz);
-  const level = new Float32Array(nx * ny * 4), n = nx * ny;
-  for (let k = 0; k < nz; k++) {
-    for (let i = 0; i < n; i++) {
-      const idx = k * n + i;
-      level.set([tData[idx] / 65535, sData[idx] / 65535, mask[idx], 0], i * 4);
+// volume: rgba16f = (T, S, O2, ocean mask), uploaded one depth level at a time to keep memory low.
+// Recreated when the number of levels changes (annual 102, monthly 57).
+let volTex = null, volNz = 0;
+function uploadVolume(d) {
+  gl.activeTexture(gl.TEXTURE0);
+  if (!volTex || volNz !== d.nz) {
+    if (volTex) gl.deleteTexture(volTex);
+    volTex = tex(gl.TEXTURE_3D, 0, () => gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, d.nz));
+    volNz = d.nz;
+  } else gl.bindTexture(gl.TEXTURE_3D, volTex);
+  const n = nx * ny, level = new Float32Array(n * 4);
+  for (let k = 0; k < d.nz; k++) {
+    for (let i = 0, idx = k * n; i < n; i++, idx++) {
+      level[i * 4] = d.t[idx] / 65535;
+      level[i * 4 + 1] = d.s[idx] / 65535;
+      level[i * 4 + 2] = d.o ? d.o[idx] / 65535 : 0;
+      level[i * 4 + 3] = d.mask[idx] & 1;
     }
     gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, k, nx, ny, 1, gl.RGBA, gl.FLOAT, level);
   }
-});
+}
+uploadVolume(first);
 
 // 1D colour map (viridis-like stops)
 const STOPS = [[68, 1, 84], [65, 68, 135], [42, 120, 142], [34, 168, 132], [122, 209, 81], [253, 231, 37]];
@@ -192,7 +207,7 @@ function moveByKeys(dt) {
 }
 
 // ---------- T-S panel ----------
-const panel = new TSPanel($('ts'), meta, { t: tData, s: sData, mask }, () => { uploadSelection(); redraw(); });
+const panel = new TSPanel($('ts'), panelMeta(), first, () => { uploadSelection(); redraw(); });
 
 function uploadSelection() {
   gl.activeTexture(gl.TEXTURE3);
@@ -231,7 +246,7 @@ function applyControls() {
   gl.uniform2f(U.uWin, lo, hi);
   gl.uniform1f(U.uOpacity, +$('opacity').value);
   gl.uniform1f(U.uContext, +$('context').value);
-  gl.uniform1f(U.uD, +$('depthScale').value);
+  gl.uniform1f(U.uD, +$('depthScale').value * cur.nz / 102);  // same height per level in every dataset
   const c = [0, 1, 2, 3, 4, 5].map((i) => +$('c' + i).value);
   gl.uniform3f(U.uClipMin, Math.min(c[0], c[1]), Math.min(c[2], c[3]), Math.min(c[4], c[5]));
   gl.uniform3f(U.uClipMax, Math.max(c[0], c[1]), Math.max(c[2], c[3]), Math.max(c[4], c[5]));
@@ -242,25 +257,63 @@ function applyControls() {
   panel.showRects = $('regions').checked;
   panel.draw();
   const k = +$('sliceDepth').value;
-  $('sliceLabel').textContent = `${meta.depth[k]} m`;
-  gl.uniform1f(U.uSlice, $('slice').checked ? (k + 0.5) / nz : -1);
+  $('sliceLabel').textContent = `${cur.ds.depth[k]} m`;
+  gl.uniform1f(U.uSlice, $('slice').checked ? (k + 0.5) / cur.nz : -1);
+  const fi = +$('field').value, [r0, r1] = meta.ranges[meta.fields[fi]];
+  const real = (u) => (r0 + u * (r1 - r0)).toFixed(fi === 2 ? 0 : 1);
+  $('winLabel').textContent = `${meta.names[fi]} window: ${real(lo)} to ${real(hi)} ${meta.units[fi]}`;
   interact();
 }
 const checks = ['fiber', 'regions', 'fill', 'slice'];
 [...ids, ...checks].forEach((id) => $(id).addEventListener('input', applyControls));
 $('slice').addEventListener('change', () => { if ($('slice').checked) cam.el = Math.max(cam.el, 1.2); });  // look down on the map
-$('sliceDepth').max = nz - 1;
 // drawing a curve or rectangle while it is hidden turns it back on
 $('ts').addEventListener('pointerdown', () => {
   const box = $(panel.tool === 'curve' ? 'fiber' : 'regions');
   if (!box.checked) { box.checked = true; applyControls(); }
 });
 
+// ---------- dataset / time step ----------
+const dsSel = $('dataset'), stepEl = $('step');
+for (const [name, d] of Object.entries(meta.datasets)) dsSel.add(new Option(d.label, name));
+[...$('field').options].forEach((o, i) => { o.disabled = i >= meta.fields.length; });
+$('dataInfo').textContent = [meta.source, meta.span && `Span ${meta.span}`].filter(Boolean).join(' · ');
+
+function syncStepUi() {
+  const ds = cur.ds;
+  $('stepRow').hidden = ds.steps.length < 2;
+  stepEl.max = ds.steps.length - 1;
+  stepEl.value = cur.k;
+  $('stepLabel').textContent = ds.stepLabels[cur.k];
+  $('sliceDepth').max = cur.nz - 1;
+  $('sliceDepth').value = Math.min(+$('sliceDepth').value, cur.nz - 1);
+}
+let loadToken = 0;
+// load dataset `name`, step index `k` and show it; later calls win over earlier slow ones
+async function showStep(name, k) {
+  const my = ++loadToken, ds = meta.datasets[name];
+  status.textContent = `Loading ${ds.label} ${ds.stepLabels[k]}…`;
+  let d;
+  try { d = await data.loadStep(name, ds.steps[k]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
+  if (my !== loadToken) return;
+  Object.assign(cur, { name, k, ds, nz: d.nz });
+  uploadVolume(d);
+  panel.setData(panelMeta(), d);
+  syncStepUi();
+  applyControls();
+  status.textContent = HELP;
+}
+dsSel.addEventListener('change', () => showStep(dsSel.value, 0));
+stepEl.addEventListener('input', () => { $('stepLabel').textContent = cur.ds.stepLabels[+stepEl.value] ?? ''; });
+stepEl.addEventListener('change', () => showStep(cur.name, +stepEl.value));
+syncStepUi();
+
 // ---------- save / load ----------
 $('save').onclick = () => {
   const state = {
     controls: Object.fromEntries([...ids, ...checks].map((id) => [id, checks.includes(id) ? $(id).checked : $(id).value])),
     camera: cam, rects: panel.rects, curve: panel.curve,
+    data: { dataset: cur.name, step: cur.k },
   };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' }));
@@ -277,6 +330,11 @@ $('file').onchange = async (e) => {
     const s = JSON.parse(await f.text());
     for (const [id, v] of Object.entries(s.controls)) checks.includes(id) ? ($(id).checked = v) : ($(id).value = v);
     Object.assign(cam, structuredClone(HOME), s.camera);
+    const want = s.data;
+    if (want && meta.datasets[want.dataset] && (want.dataset !== cur.name || want.step !== cur.k)) {
+      dsSel.value = want.dataset;
+      await showStep(want.dataset, Math.min(want.step, meta.datasets[want.dataset].steps.length - 1));
+    }
     applyControls();
     panel.setSelection(s.rects ?? [], s.curve ?? []);
   } catch (err) {
@@ -324,5 +382,5 @@ applyTheme();
 // starting selection: warm salty box plus a thermocline-like curve
 panel.setSelection([{ s0: 0.8, s1: 1, t0: 0.55, t1: 1, color: [214, 48, 49] }], [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]]);
 applyControls();
-status.textContent = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · double-click: reset';
+status.textContent = HELP;
 render(performance.now());
