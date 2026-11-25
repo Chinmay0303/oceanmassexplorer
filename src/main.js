@@ -171,11 +171,12 @@ function pan(dx, dy) { // dx, dy in focus-plane world units along right / up
   clampTarget();
 }
 
-let drag = null;
+let drag = null, downAt = null;
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
   document.activeElement?.blur();
   canvas.setPointerCapture(e.pointerId);
+  downAt = { x: e.clientX, y: e.clientY, button: e.button, shift: e.shiftKey };
   drag = e.button === 1 || e.button === 2 || e.shiftKey ? 'pan' : 'orbit';
   canvas.style.cursor = drag === 'pan' ? 'move' : 'grabbing';
 });
@@ -190,7 +191,12 @@ canvas.addEventListener('pointermove', (e) => {
   }
   interact();
 });
-canvas.addEventListener('pointerup', () => { drag = null; canvas.style.cursor = 'grab'; });
+canvas.addEventListener('pointerup', (e) => {
+  // a click (left button, hardly moved) picks the ocean point under the cursor
+  const click = downAt && downAt.button === 0 && !downAt.shift && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 4;
+  downAt = null; drag = null; canvas.style.cursor = 'grab';
+  if (click) pickAt(e.clientX, e.clientY);
+});
 canvas.addEventListener('dblclick', () => { Object.assign(cam, structuredClone(HOME)); interact(); });
 
 // zoom by `k` (< 1 zooms in), keeping the point under the cursor (ndc x, y) fixed
@@ -370,6 +376,7 @@ const showHists = () => panel.setHists(cur.hists[cur.k], cur.histMax);
 // show step k of the current dataset (must be loaded)
 function setStep(k, setPos = true) {
   if (!cur.tex[k]) return;
+  clearProbe();  // the picked values belong to the previous time step
   cur.k = k;
   if (setPos) anim.pos = k;
   stepEl.value = k;
@@ -402,6 +409,7 @@ async function selectDataset(name, k = 0) {
   let d;
   try { d = await data.loadStep(name, ds.steps[k]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
   if (my !== loadToken) return;
+  clearProbe();
   resetVolumes();
   Object.assign(cur, { name, k, ds, nz: d.nz });
   anim.pos = k;
@@ -476,6 +484,7 @@ function render(now) {
   const dt = Math.min((now - lastT) / 1000, 0.1);
   lastT = now;
   moveByKeys(dt);
+  updatePin();
   const n = cur.ds.steps.length, loop = $('loop').checked;
   if (anim.playing) {
     anim.pos += dt * +$('speed').value;
@@ -511,6 +520,93 @@ function render(now) {
 }
 function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
 function norm(a) { const l = Math.hypot(...a); return a.map((v) => v / l); }
+
+// ---------- picking: click the ocean to read its values ----------
+// A small extra pass (uPick) writes the first ocean sample under the cursor into a 4 x 1 RGBA8 target (no float
+// render targets needed); the result is decoded here, shown in #readout, marked in the diagram and pinned in 3D.
+const pickTex = gl.createTexture();
+gl.activeTexture(gl.TEXTURE6);
+gl.bindTexture(gl.TEXTURE_2D, pickTex);
+gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 4, 1);
+const pickFbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, pickFbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, pickTex, 0);
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+let probe = null;  // { tc: texture coords [u, v, w], val: normalised [T, S, O2] }
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const currentUD = () => +$('depthScale').value * cur.nz / 102;
+
+function pickRaw(ndcX, ndcY) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, pickFbo);
+  gl.viewport(0, 0, 4, 1);
+  gl.uniform1i(U.uPick, 1);
+  gl.uniform2f(U.uPickNdc, ndcX, ndcY);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const px = new Uint8Array(16);
+  gl.readPixels(0, 0, 4, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform1i(U.uPick, 0);
+  if (!px[12]) return null;
+  const u16 = (i) => (px[i] * 256 + px[i + 1]) / 65535;
+  return { tc: [u16(0), u16(2), u16(4)], val: [u16(6), u16(8), u16(10)] };
+}
+
+function pickAt(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  probe = pickRaw(((clientX - r.left) / r.width) * 2 - 1, 1 - ((clientY - r.top) / r.height) * 2);
+  if (probe) showProbe(); else clearProbe();
+}
+
+function clearProbe() {
+  probe = null;
+  $('readout').hidden = true;
+  $('pin').hidden = true;
+  panel?.setProbe(null);
+}
+
+function showProbe() {
+  const { tc, val } = probe, [u, v, w] = tc;
+  const lon = meta.lon0 + (u * nx - 0.5) * meta.dlon, lat = meta.lat0 + (v * ny - 0.5) * meta.dlat;
+  const kk = Math.min(Math.max(w * cur.nz - 0.5, 0), cur.nz - 1), k0 = Math.floor(kk), k1 = Math.min(k0 + 1, cur.nz - 1);
+  const depth = cur.ds.depth[k0] * (1 - (kk - k0)) + cur.ds.depth[k1] * (kk - k0);
+  const lines = [`${Math.abs(lat).toFixed(1)}°${lat < 0 ? 'S' : 'N'}  ${Math.abs(lon).toFixed(1)}°${lon < 0 ? 'W' : 'E'}  ${depth.toFixed(0)} m`];
+  meta.fields.forEach((f, i) => {
+    const [r0, r1] = meta.ranges[f];
+    lines.push(`${meta.names[i]}: ${(r0 + val[i] * (r1 - r0)).toFixed(i === 2 ? 1 : 2)} ${meta.units[i]}`);
+  });
+  const near = (pt, pts) => Math.min(...pts.slice(1).map((b, i) => {  // distance from pt to the polyline in the diagram
+    const a = pts[i], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
+    const t = Math.min(1, Math.max(0, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / l2));
+    return Math.hypot(pt[0] - a[0] - t * dx, pt[1] - a[1] - t * dy);
+  }));
+  const inside = panel.items.filter((it) => {
+    const d = PAIRS[it.pair], pt = [val[d.x], val[d.y]];
+    return it.kind === 'rect' ? pt[0] >= it.s0 && pt[0] <= it.s1 && pt[1] >= it.t0 && pt[1] <= it.t1 : near(pt, it.points) < 0.02;
+  });
+  if (inside.length) lines.push('In: ' + inside.map((it) => it.name).join(', '));
+  $('readout').textContent = lines.join('\n');
+  $('readout').hidden = false;
+  panel.setProbe(val);
+  updatePin();
+}
+
+// keep the pin on the picked point while the camera moves (it is drawn on top, not occluded)
+function updatePin() {
+  const pin = $('pin');
+  if (!probe) { pin.hidden = true; return; }
+  const [u, v, w] = probe.tc, uD = currentUD();
+  const P = [(u - 0.5) * 2, (0.5 - w) * 2 * uD, 0.5 - v];
+  const { dir, fwd, right, up } = basis();
+  const rel = P.map((c, i) => c - (cam.target[i] + cam.dist * dir[i]));
+  const d = dot3(rel, fwd);
+  const xn = dot3(rel, right) / (d * TAN * (canvas.clientWidth / canvas.clientHeight)), yn = dot3(rel, up) / (d * TAN);
+  pin.hidden = d <= 0.01 || Math.abs(xn) > 1.05 || Math.abs(yn) > 1.05;
+  pin.style.left = `${((xn + 1) / 2) * canvas.clientWidth}px`;
+  pin.style.top = `${((1 - yn) / 2) * canvas.clientHeight}px`;
+}
+addEventListener('keydown', (e) => { if (e.key === 'Escape') clearProbe(); });
 
 // canvases follow the page theme (light / dark)
 function applyTheme() {

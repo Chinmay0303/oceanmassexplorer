@@ -67,6 +67,7 @@ export class TSPanel {
     this.selectedId = null;
     this.drag = null;
     this.theme = themeColors();
+    this.probe = null;         // normalised [T, S, O2] of the point picked in the 3D view (marked in every diagram)
     this.cmapChoice = 'auto';  // colour-map choice of the 1D transfer function (colours the axis strips)
     this.hists = null;
     this.histMax = null;
@@ -140,6 +141,11 @@ export class TSPanel {
     Object.assign(it, patch);
     this.draw();
     this.onChange();
+  }
+
+  setProbe(values) {
+    this.probe = values;
+    this.draw();
   }
 
   setTool(tool) {
@@ -432,6 +438,12 @@ export class TSPanel {
       }
     }
     ctx.globalAlpha = 1; ctx.setLineDash([]);
+    if (this.probe) {  // picked point: ring + cross, visible on light and dark backgrounds
+      const [px, py] = this.toPx(this.probe[ix], this.probe[iy]);
+      ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+      ctx.beginPath(); ctx.arc(px, py, 6, 0, 6.3); ctx.moveTo(px - 10, py); ctx.lineTo(px + 10, py); ctx.moveTo(px, py - 10); ctx.lineTo(px, py + 10); ctx.stroke();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
+    }
     this.drawLegend();
   }
 

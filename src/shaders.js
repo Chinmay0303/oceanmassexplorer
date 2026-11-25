@@ -47,6 +47,8 @@ uniform vec3 uRectColor[${MAX_RECTS}];
 uniform int uRectPair[${MAX_RECTS}];    // diagram of each rectangle
 uniform float uBand;
 uniform vec3 uBg, uLand, uEdge;  // theme colours: background, land (slice mode), box edges
+uniform bool uPick;       // picking pass: write the first ocean sample under uPickNdc into 4 pixels instead of colours
+uniform vec2 uPickNdc;
 
 // palette: tertiary / secondary / primary
 const vec3 OCEAN_LIGHT = vec3(0.110, 0.639, 0.925);
@@ -133,10 +135,64 @@ vec3 fiberNormal(vec3 p, int id) {
   return normalize(g + 1e-9);
 }
 
+// 16-bit value -> two bytes (as 0..1 colour channels)
+vec2 pack16(float x) {
+  float v = floor(clamp(x, 0.0, 1.0) * 65535.0 + 0.5);
+  return vec2(floor(v / 256.0), mod(v, 256.0)) / 255.0;
+}
+
+// Picking pass, drawn into a 4 x 1 RGBA8 target: pixel 0 = texture coords u, v; 1 = w, T; 2 = S, O2; 3 = found flag.
+// The sample is the first ocean voxel along the ray (the surface of the ocean body), or the slice plane in slice mode.
+vec4 pickOut(vec3 ro, vec3 rd, vec3 h) {
+  int slot = int(gl_FragCoord.x);
+  bool found = false;
+  vec3 tcH = vec3(0.0);
+  vec4 vH = vec4(0.0);
+  if (uSlice >= 0.0) {
+    float y = uD * (1.0 - 2.0 * uSlice);
+    float ts = (y - ro.y) / rd.y;
+    vec3 p = ro + rd * ts, tc = toTex(p);
+    vec4 v;
+    if (ts > 0.0 && abs(p.x) <= 1.0 && abs(p.z) <= 0.5 && inClip(tc) && sampleV(tc, v)) { found = true; tcH = tc; vH = v; }
+  } else {
+    vec3 inv = 1.0 / rd, t0 = (-h - ro) * inv, t1 = (h - ro) * inv;
+    vec3 tmin = min(t0, t1), tmax = max(t0, t1);
+    float tn = max(max(tmin.x, tmin.y), max(tmin.z, 0.0)), tf = min(min(tmax.x, tmax.y), tmax.z);
+    if (tf > tn) {
+      float dt = (tf - tn) / 320.0, tPrev = tn;
+      for (int i = 0; i < 320; i++) {
+        float t = tn + dt * float(i);
+        vec3 tc = toTex(ro + rd * t);
+        vec4 v;
+        if (inClip(tc) && sampleV(tc, v)) {
+          float a = tPrev, b = t;  // bisection between the last empty sample and this one
+          for (int k = 0; k < 6; k++) {
+            float m = 0.5 * (a + b);
+            vec3 tm = toTex(ro + rd * m);
+            vec4 vm;
+            if (inClip(tm) && sampleV(tm, vm)) b = m; else a = m;
+          }
+          tcH = toTex(ro + rd * b);
+          sampleV(tcH, vH);
+          found = true;
+          break;
+        }
+        tPrev = t;
+      }
+    }
+  }
+  if (slot == 0) return vec4(pack16(tcH.x), pack16(tcH.y));
+  if (slot == 1) return vec4(pack16(tcH.z), pack16(vH.r));
+  if (slot == 2) return vec4(pack16(vH.g), pack16(vH.b));
+  return vec4(found ? 1.0 : 0.0, 0.0, 0.0, 1.0);
+}
+
 void main() {
-  vec3 rd = normalize(uFwd + vUv.x * uAspect * uTan * uRight + vUv.y * uTan * uUp);
+  vec2 uv = uPick ? uPickNdc : vUv;
+  vec3 rd = normalize(uFwd + uv.x * uAspect * uTan * uRight + uv.y * uTan * uUp);
   vec3 ro = uEye;
   vec3 h = vec3(1.0, uD, 0.5);
+  if (uPick) { outColor = pickOut(ro, rd, h); return; }
 
   vec3 bg = uBg;
 

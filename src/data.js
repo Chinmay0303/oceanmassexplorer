@@ -28,7 +28,7 @@ async function getBytes(url, expected) {
 function fromWoa23(m) {
   return {
     legacy: false, source: m.source, span: m.span_years,
-    nx: m.nx, ny: m.ny, lat0: m.lat0, dlat: m.dlat, lon0: m.lon0,
+    nx: m.nx, ny: m.ny, lat0: m.lat0, dlat: m.dlat, lon0: m.lon0, dlon: m.dlon ?? 1,
     fields: m.fields, names: m.fields.map((f) => NAMES[f]), units: m.fields.map((f) => UNITS[f]),
     ranges: m.ranges,
     datasets: Object.fromEntries(Object.entries(m.datasets).map(([k, d]) => [k, { ...d, stepLabels: d.step_labels }])),
@@ -38,7 +38,7 @@ function fromWoa23(m) {
 function fromLegacy(m) {
   return {
     legacy: true, source: 'Legacy annual 1-degree T/S (time span unknown)', span: '',
-    nx: m.nx, ny: m.ny, lat0: m.lat0, dlat: m.dlat, lon0: m.lon0,
+    nx: m.nx, ny: m.ny, lat0: m.lat0, dlat: m.dlat, lon0: m.lon0, dlon: 1,
     fields: ['t', 's'], names: [NAMES.t, NAMES.s], units: [UNITS.t, UNITS.s],
     ranges: { t: m.t_range, s: m.s_range },
     datasets: { annual: { label: 'Annual (legacy)', nz: m.nz, depth: m.depth, steps: ['legacy'], stepLabels: ['Annual'] } },
