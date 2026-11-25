@@ -1,7 +1,7 @@
 import './simple.css';
 import './style.css';
 import { VERT, FRAG, MAX_CURVE, MAX_RECTS } from './shaders.js';
-import { TSPanel } from './ts.js';
+import { TSPanel, buildHists } from './ts.js';
 import { themeColors, CURVE_RGB } from './theme.js';
 
 import { openData } from './data.js';
@@ -207,7 +207,8 @@ function moveByKeys(dt) {
 }
 
 // ---------- T-S panel ----------
-const panel = new TSPanel($('ts'), panelMeta(), first, () => { uploadSelection(); redraw(); });
+const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, units: meta.units, ranges: meta.ranges }, () => { uploadSelection(); redraw(); });
+panel.setHists(buildHists(first, panelMeta()));
 
 function uploadSelection() {
   gl.activeTexture(gl.TEXTURE3);
@@ -298,7 +299,7 @@ async function showStep(name, k) {
   if (my !== loadToken) return;
   Object.assign(cur, { name, k, ds, nz: d.nz });
   uploadVolume(d);
-  panel.setData(panelMeta(), d);
+  panel.setHists(buildHists(d, panelMeta()));
   syncStepUi();
   applyControls();
   status.textContent = HELP;
