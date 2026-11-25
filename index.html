@@ -15,24 +15,39 @@
   <header><h1>Ocean Water Mass Explorer</h1></header>
 
   <section>
-    <h2>Temperature–Salinity diagram</h2>
+    <h2>Water-mass diagram</h2>
+    <div class="field"><label for="pair">Diagram</label><select id="pair"><option value="ts">Temperature – Salinity</option><option value="to">Temperature – Oxygen</option><option value="so">Salinity – Oxygen</option></select></div>
     <canvas id="ts"></canvas>
     <div class="row">
       <div class="check"><input id="toolRect" type="radio" name="tool" value="rect" checked><label for="toolRect">Rectangle</label></div>
       <div class="check"><input id="toolCurve" type="radio" name="tool" value="curve"><label for="toolCurve">Curve</label></div>
     </div>
     <div class="row"><button id="clearRects">Clear rectangles</button><button id="clearCurve">Clear curve</button></div>
-    <p class="hint">Each rectangle is a closed control polygon, and a curve is an open one. Both extract fiber surfaces in 3D (up to 8 rectangles).</p>
+    <p class="hint">Drag in the diagram to draw. A rectangle selects a region (its boundary surface is shown), a curve extracts a fiber surface. Up to 8 rectangles. Each diagram keeps its own selections; the 3D view shows the ones of the diagram chosen above.</p>
   </section>
+
+  <details open>
+    <summary>Data</summary>
+    <div class="field"><label for="dataset">Dataset</label><select id="dataset"></select></div>
+    <div class="field value" id="stepRow" hidden><label for="step">Month</label><input id="step" type="range" min="0" max="0" step="1" value="0"><output id="stepLabel" for="step"></output></div>
+    <div id="animRow" hidden>
+      <div class="row"><button id="play" disabled>Play</button>
+        <select id="speed" aria-label="Playback speed"><option value="0.5">0.5 months/s</option><option value="1" selected>1 month/s</option><option value="2">2 months/s</option><option value="4">4 months/s</option></select></div>
+      <div class="check"><input id="smooth" type="checkbox" checked><label for="smooth">Blend between months</label></div>
+      <div class="check"><input id="loop" type="checkbox" checked><label for="loop">Loop (Dec → Jan)</label></div>
+    </div>
+    <p class="hint" id="dataInfo"></p>
+  </details>
 
   <details open>
     <summary>Volume</summary>
     <div class="field"><label for="mode">Mode</label>
       <select id="mode"><option value="0">1D transfer function</option><option value="1" selected>T-S regions</option></select></div>
     <div class="field"><label for="field">Field</label>
-      <select id="field"><option value="0">Temperature</option><option value="1">Salinity</option></select></div>
+      <select id="field"><option value="0">Temperature</option><option value="1">Salinity</option><option value="2">Dissolved oxygen</option></select></div>
     <div class="field"><label for="winLo">Window min</label><input id="winLo" type="range" min="0" max="1" step="0.005" value="0"></div>
     <div class="field"><label for="winHi">Window max</label><input id="winHi" type="range" min="0" max="1" step="0.005" value="1"></div>
+    <p class="hint" id="winLabel"></p>
     <div class="field"><label for="opacity">Opacity</label><input id="opacity" type="range" min="0.02" max="1" step="0.01" value="0.4"></div>
     <div class="field"><label for="context">Ocean context</label><input id="context" type="range" min="0" max="1" step="0.01" value="0.8"></div>
     <div class="field"><label for="depthScale">Depth scale</label><input id="depthScale" type="range" min="0.05" max="0.6" step="0.01" value="0.25"></div>

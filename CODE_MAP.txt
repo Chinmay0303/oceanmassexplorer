@@ -19,6 +19,11 @@ File: tools/prep.py  (62 lines)
  Output: public/data/{t.bin 13MB, s.bin 13MB, mask.bin 6.6MB, meta.json}
    meta: 360x180x102 grid (1 deg, 102 depth levels 0-5500 m), lat0=-89.5, lon0=-179.5,
          T range [-3,31] C, S range [5,41] PSU.
+ 1.5 NEW (not yet used by the app) tools/download.py  fetches 39 WOA23 NetCDF files (t,s,o x annual+12 months, span decav71A0).
+ 1.6 NEW tools/prep.py (replaces the old script above)  global per-field ranges, nearest-fill per field, writes
+                                public/data/woa23/{meta.json, annual/00.bin, monthly/01..12.bin + .mask.bin}. See log.md.
+ NOTE: lines 1.1-1.4 describe the OLD prep.py (t,s annual only); the current prep.py is the new one. The app still
+ reads the old public/data/{t,s,mask}.bin + meta.json until the frontend is migrated.
  Proposal map: [Dataset] WOA23 temperature + salinity on lat/lon/depth grid. DONE (annual 1-deg only).
  Note: no other WOA fields (oxygen, nutrients, ...), no seasonal/monthly, no 0.25-deg.
 
@@ -232,3 +237,42 @@ ts.js - TSPanel fields (rects, curve, tool, drag, show*, theme, hist). No other 
 Known smells seen while auditing (details in ROADMAP.txt): U Proxy re-queries uniform locations; DOM used as
 control-state store; ts.js imports limits from shaders.js; dead stale hint text ("control polygon") in index.html;
 panel.drag/curve share one field for two tools.
+
+=================================================================================
+PART 12. CHANGES AFTER THE FIRST MAP (dataset selector)  -- line numbers in Parts 2-8 above are now shifted
+=================================================================================
+ 12.1 src/data.js (NEW)       openData(): finds meta (?data= / VITE_DATA_URL / data/woa23/ / legacy data/), returns
+                              { meta, base, loadStep(dataset, step) }; checks byte sizes; caches steps. Replaces old 3.1.
+ 12.2 index.html "Data" group Dataset select, Month slider (shown only for monthly), data info line. Field select has Oxygen.
+                              Window slider has a real-unit readout (#winLabel).                                   [P2]
+ 12.3 main.js data block      top of file: loads first step, `cur` = current dataset/step/nz, panelMeta().          (was 3.1)
+ 12.4 main.js uploadVolume()  replaces 3.5: texture = (T, S, O2, mask), recreated if nz changes, per-level upload.
+ 12.5 main.js "dataset / time step" block  (before save/load): dataset + month UI, showStep() with a load token so the
+                              last request wins; month loads on slider release.
+ 12.6 main.js applyControls() uD scaled by nz/102, slice depth from dataset depth axis, window readout.        (7.4)
+ 12.7 main.js save/load       saves { data: { dataset, step } }; load re-selects it before applying controls.  (7.7/7.8)
+ 12.8 shaders.js              uVol = (T,S,O2,mask in .a); 1D mode samples channel uField (0 T,1 S,2 O2).        (6.3,6.4,6.6,6.7)
+ 12.9 ts.js setData()         swap histogram for another step; ranges from meta.ranges; mask & 1.               (5.x)
+ Interaction map (Part 10) additions: Dataset select / Month slider -> main.js 12.5 -> cur + showStep -> uploadVolume (L4)
+ + panel.setData (L3) -> same shader path. Nothing else in the interaction chain changed.
+
+=================================================================================
+PART 13. CHANGES AFTER PART 12 (preload, playback, diagram pairs)  -- names are stable, line numbers are not
+=================================================================================
+ 13.1 main.js makeVolume()/resetVolumes()/addStep()   one GPU texture + histograms per time step in cur.tex[] / cur.hists[];
+                              replaces the single-texture upload of 12.4. Uploads use texture unit 7.
+ 13.2 main.js selectDataset() / preloadRest() / setStep()   switch dataset (first step shown at once, others load in the
+                              background, status shows progress); setStep = instant switch to a loaded month. Replaces showStep (12.5).
+ 13.3 main.js anim / setPlaying() / Space key          playback state (pos = fractional step), Play button, Space shortcut.
+ 13.4 main.js render()        advances anim.pos by dt*speed, wraps/stops, picks textures A (floor) and B (next) + uBlend,
+                              half resolution while playing; binds units 0 and 5.
+ 13.5 index.html              "Data" group: play row (Play, speed, blend, loop); "Water-mass diagram" heading + Diagram select.
+ 13.6 shaders.js              vol(tc) = texture(uVol) or mix with uVolB by uBlend; all volume reads go through it.
+                              sampleST() builds (x, y) from uPair channels (T-S, T-O2, S-O2).
+ 13.7 ts.js                   PAIRS, buildHists() (all pair histograms in one pass), TSPanel with per-pair selections
+                              (rects/curve are accessors for the active pair), setHists(), setPair(), getSelections()/setSelections(),
+                              nice axis ticks, axis labels from the pair. (Replaces 5.2/5.3 structure; 5.5-5.9 behave the same on the active pair.)
+ 13.8 main.js uploadSelection()  now also sets uPair for the active pair.
+ 13.9 main.js save/load       saves pair + selections of all pairs + dataset/step; loads old rects/curve as T-S.
+ Interaction map additions: Play/Pause/Space/speed/blend/loop -> 13.3 -> render() 13.4 -> uBlend, textures A/B -> vol() in shader;
+ Diagram select -> panel.setPair -> uploadSelection (uPair, region texture, SDF) -> sampleST in shader.

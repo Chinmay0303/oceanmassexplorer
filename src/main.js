@@ -1,21 +1,26 @@
 import './simple.css';
 import './style.css';
 import { VERT, FRAG, MAX_CURVE, MAX_RECTS } from './shaders.js';
-import { TSPanel } from './ts.js';
+import { TSPanel, buildHists, PAIRS } from './ts.js';
 import { themeColors, CURVE_RGB } from './theme.js';
+
+import { openData } from './data.js';
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
-
-async function fetchBin(name, Type) {
-  const buf = await (await fetch(`data/${name}`)).arrayBuffer();
-  return new Type(buf);
-}
+const HELP = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · double-click: reset';
 
 // ---------- data ----------
-const meta = await (await fetch('data/meta.json')).json();
-const [tData, sData, mask] = await Promise.all([fetchBin('t.bin', Uint16Array), fetchBin('s.bin', Uint16Array), fetchBin('mask.bin', Uint8Array)]);
-const { nx, ny, nz } = meta;
+let data;
+try { data = await openData(); } catch (e) { status.textContent = 'Could not load ocean data: ' + e.message; throw e; }
+const meta = data.meta;
+const { nx, ny } = meta;
+const cur = { name: Object.keys(meta.datasets)[0], k: 0 };
+cur.ds = meta.datasets[cur.name];
+const first = await data.loadStep(cur.name, cur.ds.steps[0]);
+cur.nz = first.nz;
+// what the T-S panel needs to know about the loaded step
+const panelMeta = () => ({ nx, ny, nz: cur.ds.nz, depth: cur.ds.depth, lat0: meta.lat0, dlat: meta.dlat, ranges: meta.ranges });
 
 // ---------- GL ----------
 const canvas = $('gl');
@@ -51,18 +56,44 @@ function tex(target, unit, setup) {
   return t;
 }
 
-// volume: rgba16f = (T, S, ocean mask), uploaded one depth level at a time to keep memory low
-tex(gl.TEXTURE_3D, 0, () => {
-  gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, nz);
-  const level = new Float32Array(nx * ny * 4), n = nx * ny;
-  for (let k = 0; k < nz; k++) {
-    for (let i = 0; i < n; i++) {
-      const idx = k * n + i;
-      level.set([tData[idx] / 65535, sData[idx] / 65535, mask[idx], 0], i * 4);
+// Volumes: one RGBA16F 3D texture (T, S, O2, ocean mask) per time step of the current dataset, uploaded one
+// depth level at a time to keep memory low. Annual = 1 texture (53 MB), monthly = 12 textures (12 x 30 MB), so every
+// month is on the GPU and switching / animating needs no upload. Uploads use texture unit UPLOAD_UNIT so they never
+// disturb the units the shader samples from.
+const UPLOAD_UNIT = 7;
+function makeVolume(d) {
+  return tex(gl.TEXTURE_3D, UPLOAD_UNIT, () => {
+    gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, nx, ny, d.nz);
+    const n = nx * ny, level = new Float32Array(n * 4);
+    for (let k = 0; k < d.nz; k++) {
+      for (let i = 0, idx = k * n; i < n; i++, idx++) {
+        level[i * 4] = d.t[idx] / 65535;
+        level[i * 4 + 1] = d.s[idx] / 65535;
+        level[i * 4 + 2] = d.o ? d.o[idx] / 65535 : 0;
+        level[i * 4 + 3] = d.mask[idx] & 1;
+      }
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, k, nx, ny, 1, gl.RGBA, gl.FLOAT, level);
     }
-    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, k, nx, ny, 1, gl.RGBA, gl.FLOAT, level);
+  });
+}
+// per-dataset state kept on `cur`: tex[k] GPU volume of step k, hists[k] its diagram histograms,
+// histMax = brightness normalisation over all loaded steps, ready = number of loaded steps
+function resetVolumes() {
+  for (const t of cur.tex ?? []) gl.deleteTexture(t);
+  Object.assign(cur, { tex: [], hists: [], histMax: {}, ready: 0 });
+}
+function addStep(k, d) {
+  cur.tex[k] = makeVolume(d);
+  cur.hists[k] = buildHists(d, panelMeta());
+  for (const [key, h] of Object.entries(cur.hists[k])) {
+    let m = cur.histMax[key] ?? 0;
+    for (const v of h) if (v > m) m = v;
+    cur.histMax[key] = m;
   }
-});
+  cur.ready++;
+}
+resetVolumes();
+addStep(0, first);
 
 // 1D colour map (viridis-like stops)
 const STOPS = [[68, 1, 84], [65, 68, 135], [42, 120, 142], [34, 168, 132], [122, 209, 81], [253, 231, 37]];
@@ -104,7 +135,7 @@ function curveSDF(curve) {
   return out;
 }
 
-gl.uniform1i(U.uVol, 0); gl.uniform1i(U.uTF1, 2); gl.uniform1i(U.uTF2, 3); gl.uniform1i(U.uSDF, 4);
+gl.uniform1i(U.uVol, 0); gl.uniform1i(U.uVolB, 5); gl.uniform1i(U.uTF1, 2); gl.uniform1i(U.uTF2, 3); gl.uniform1i(U.uSDF, 4);
 gl.uniform3fv(U.uFiberColor, CURVE_RGB.map((c) => c / 255));
 gl.uniform1f(U.uBand, 0.01);
 
@@ -192,7 +223,8 @@ function moveByKeys(dt) {
 }
 
 // ---------- T-S panel ----------
-const panel = new TSPanel($('ts'), meta, { t: tData, s: sData, mask }, () => { uploadSelection(); redraw(); });
+const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, units: meta.units, ranges: meta.ranges }, () => { uploadSelection(); redraw(); });
+panel.setHists(cur.hists[0], cur.histMax);
 
 function uploadSelection() {
   gl.activeTexture(gl.TEXTURE3);
@@ -206,6 +238,7 @@ function uploadSelection() {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SDF, SDF, gl.RG, gl.FLOAT, curveSDF(panel.curve.slice(0, n)));
     sdfKey = key;
   }
+  gl.uniform2i(U.uPair, panel.pair.x, panel.pair.y);
   gl.uniform1i(U.uNCurve, n);
   const rects = panel.rects.slice(0, MAX_RECTS);
   const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3);
@@ -218,6 +251,8 @@ function uploadSelection() {
   gl.uniform1i(U.uNRect, rects.length);
 }
 
+$('pair').addEventListener('change', () => panel.setPair($('pair').value));
+[...$('pair').options].forEach((o) => { o.disabled = PAIRS[o.value].x >= meta.fields.length; });  // oxygen pairs need the oxygen field
 document.querySelectorAll('input[name=tool]').forEach((r) => r.addEventListener('change', () => { panel.tool = r.value; }));
 $('clearRects').onclick = () => panel.clear('rects');
 $('clearCurve').onclick = () => panel.clear('curve');
@@ -231,7 +266,7 @@ function applyControls() {
   gl.uniform2f(U.uWin, lo, hi);
   gl.uniform1f(U.uOpacity, +$('opacity').value);
   gl.uniform1f(U.uContext, +$('context').value);
-  gl.uniform1f(U.uD, +$('depthScale').value);
+  gl.uniform1f(U.uD, +$('depthScale').value * cur.nz / 102);  // same height per level in every dataset
   const c = [0, 1, 2, 3, 4, 5].map((i) => +$('c' + i).value);
   gl.uniform3f(U.uClipMin, Math.min(c[0], c[1]), Math.min(c[2], c[3]), Math.min(c[4], c[5]));
   gl.uniform3f(U.uClipMax, Math.max(c[0], c[1]), Math.max(c[2], c[3]), Math.max(c[4], c[5]));
@@ -242,25 +277,113 @@ function applyControls() {
   panel.showRects = $('regions').checked;
   panel.draw();
   const k = +$('sliceDepth').value;
-  $('sliceLabel').textContent = `${meta.depth[k]} m`;
-  gl.uniform1f(U.uSlice, $('slice').checked ? (k + 0.5) / nz : -1);
+  $('sliceLabel').textContent = `${cur.ds.depth[k]} m`;
+  gl.uniform1f(U.uSlice, $('slice').checked ? (k + 0.5) / cur.nz : -1);
+  const fi = +$('field').value, [r0, r1] = meta.ranges[meta.fields[fi]];
+  const real = (u) => (r0 + u * (r1 - r0)).toFixed(fi === 2 ? 0 : 1);
+  $('winLabel').textContent = `${meta.names[fi]} window: ${real(lo)} to ${real(hi)} ${meta.units[fi]}`;
   interact();
 }
 const checks = ['fiber', 'regions', 'fill', 'slice'];
 [...ids, ...checks].forEach((id) => $(id).addEventListener('input', applyControls));
 $('slice').addEventListener('change', () => { if ($('slice').checked) cam.el = Math.max(cam.el, 1.2); });  // look down on the map
-$('sliceDepth').max = nz - 1;
 // drawing a curve or rectangle while it is hidden turns it back on
 $('ts').addEventListener('pointerdown', () => {
   const box = $(panel.tool === 'curve' ? 'fiber' : 'regions');
   if (!box.checked) { box.checked = true; applyControls(); }
 });
 
+// ---------- dataset / time step ----------
+const dsSel = $('dataset'), stepEl = $('step');
+for (const [name, d] of Object.entries(meta.datasets)) dsSel.add(new Option(d.label, name));
+[...$('field').options].forEach((o, i) => { o.disabled = i >= meta.fields.length; });
+$('dataInfo').textContent = [meta.source, meta.span && `Span ${meta.span}`].filter(Boolean).join(' · ');
+
+function syncStepUi() {
+  const ds = cur.ds;
+  $('stepRow').hidden = ds.steps.length < 2;
+  stepEl.max = ds.steps.length - 1;
+  stepEl.value = cur.k;
+  $('animRow').hidden = ds.steps.length < 2;
+  playBtn.disabled = cur.ready < ds.steps.length;
+  stepEl.disabled = cur.ready < ds.steps.length;  // steps are selectable once all are on the GPU
+  $('stepLabel').textContent = ds.stepLabels[cur.k];
+  $('sliceDepth').max = cur.nz - 1;
+  $('sliceDepth').value = Math.min(+$('sliceDepth').value, cur.nz - 1);
+}
+// ---- playback: pos = position in steps (fractional while blending); cur.k = nearest step, shown in UI/diagram ----
+const anim = { playing: false, pos: 0 };
+const playBtn = $('play');
+function setPlaying(on) {
+  anim.playing = on && cur.ready === cur.ds.steps.length && cur.ds.steps.length > 1;
+  if (!anim.playing) anim.pos = cur.k;  // stop on an exact step
+  playBtn.textContent = anim.playing ? 'Pause' : 'Play';
+  redraw();
+}
+playBtn.addEventListener('click', () => setPlaying(!anim.playing));
+addEventListener('keydown', (e) => {
+  if (e.key === ' ' && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target.tagName)) { e.preventDefault(); setPlaying(!anim.playing); }
+});
+$('smooth').addEventListener('input', redraw);
+
+let loadToken = 0;
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+const showHists = () => panel.setHists(cur.hists[cur.k], cur.histMax);
+
+// show step k of the current dataset (must be loaded)
+function setStep(k, setPos = true) {
+  if (!cur.tex[k]) return;
+  cur.k = k;
+  if (setPos) anim.pos = k;
+  stepEl.value = k;
+  $('stepLabel').textContent = cur.ds.stepLabels[k];
+  showHists();
+  redraw();
+}
+// load the remaining steps of the current dataset in the background (token = request that started it)
+async function preloadRest(my) {
+  const n = cur.ds.steps.length;
+  for (let j = 0; j < n; j++) {
+    if (cur.tex[j]) continue;
+    status.textContent = `Loading ${cur.ds.label.toLowerCase()} data: ${cur.ready}/${n} ${cur.ds.stepLabels[j]}…`;
+    let d;
+    try { d = await data.loadStep(cur.name, cur.ds.steps[j]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
+    if (my !== loadToken) return;
+    addStep(j, d);
+    await nextFrame();
+    if (my !== loadToken) return;
+  }
+  syncStepUi();
+  showHists();
+  status.textContent = HELP;
+}
+// switch dataset (loads step k first and shows it; the other steps follow in the background)
+async function selectDataset(name, k = 0) {
+  const my = ++loadToken, ds = meta.datasets[name];
+  setPlaying(false);
+  status.textContent = `Loading ${ds.label} ${ds.stepLabels[k]}…`;
+  let d;
+  try { d = await data.loadStep(name, ds.steps[k]); } catch (e) { status.textContent = 'Could not load data: ' + e.message; return; }
+  if (my !== loadToken) return;
+  resetVolumes();
+  Object.assign(cur, { name, k, ds, nz: d.nz });
+  anim.pos = k;
+  addStep(k, d);
+  syncStepUi();
+  showHists();
+  applyControls();
+  if (cur.ds.steps.length > 1) preloadRest(my); else status.textContent = HELP;
+}
+dsSel.addEventListener('change', () => selectDataset(dsSel.value, 0));
+stepEl.addEventListener('input', () => setStep(+stepEl.value));
+syncStepUi();
+
 // ---------- save / load ----------
 $('save').onclick = () => {
   const state = {
     controls: Object.fromEntries([...ids, ...checks].map((id) => [id, checks.includes(id) ? $(id).checked : $(id).value])),
-    camera: cam, rects: panel.rects, curve: panel.curve,
+    camera: cam, pair: panel.pairKey, selections: panel.getSelections(),
+    data: { dataset: cur.name, step: cur.k },
   };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' }));
@@ -277,8 +400,18 @@ $('file').onchange = async (e) => {
     const s = JSON.parse(await f.text());
     for (const [id, v] of Object.entries(s.controls)) checks.includes(id) ? ($(id).checked = v) : ($(id).value = v);
     Object.assign(cam, structuredClone(HOME), s.camera);
+    const want = s.data;
+    if (want && meta.datasets[want.dataset]) {
+      const k = Math.min(want.step, meta.datasets[want.dataset].steps.length - 1);
+      if (want.dataset !== cur.name) { dsSel.value = want.dataset; await selectDataset(want.dataset, k); }
+      else setStep(k);
+    }
     applyControls();
-    panel.setSelection(s.rects ?? [], s.curve ?? []);
+    const pk = PAIRS[s.pair] && !$('pair').querySelector(`option[value=${s.pair}]`).disabled ? s.pair : 'ts';
+    $('pair').value = pk;
+    panel.setPair(pk);
+    // configs saved before the pair selector only have rects/curve (T-S)
+    panel.setSelections(s.selections ?? { ts: { rects: s.rects ?? [], curve: s.curve ?? [] } });
   } catch (err) {
     alert('Could not load configuration: ' + err.message);
   }
@@ -289,8 +422,17 @@ $('file').onchange = async (e) => {
 let lastT = 0;
 function render(now) {
   requestAnimationFrame(render);
-  moveByKeys(Math.min((now - lastT) / 1000, 0.1));
+  const dt = Math.min((now - lastT) / 1000, 0.1);
   lastT = now;
+  moveByKeys(dt);
+  const n = cur.ds.steps.length, loop = $('loop').checked;
+  if (anim.playing) {
+    anim.pos += dt * +$('speed').value;
+    if (anim.pos >= n) { if (loop) anim.pos %= n; else { anim.pos = n - 1; setPlaying(false); } }
+    const k = Math.round(anim.pos) % n;
+    if (k !== cur.k) setStep(k, false);
+    interact();  // half resolution while playing, full resolution after pausing
+  }
   const sc = now - lastInteract < 200 ? 0.5 : 1;
   if (sc !== lastScale) { lastScale = sc; dirty = true; }
   const dpr = Math.min(devicePixelRatio || 1, 2) * sc;
@@ -304,6 +446,16 @@ function render(now) {
   gl.uniform3fv(U.uEye, eye); gl.uniform3fv(U.uFwd, fwd); gl.uniform3fv(U.uRight, right); gl.uniform3fv(U.uUp, up);
   gl.uniform1f(U.uTan, TAN);
   gl.uniform1f(U.uAspect, w / h);
+  // volumes: A = current step, B = next step (only sampled while blending)
+  let a = cur.k, b = cur.k, blend = 0;
+  if (anim.playing && $('smooth').checked) {
+    a = Math.floor(anim.pos) % n;
+    b = loop ? (a + 1) % n : Math.min(a + 1, n - 1);
+    blend = anim.pos - Math.floor(anim.pos);
+  }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_3D, cur.tex[a]);
+  gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_3D, cur.tex[b]);
+  gl.uniform1f(U.uBlend, blend);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
@@ -324,5 +476,5 @@ applyTheme();
 // starting selection: warm salty box plus a thermocline-like curve
 panel.setSelection([{ s0: 0.8, s1: 1, t0: 0.55, t1: 1, color: [214, 48, 49] }], [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]]);
 applyControls();
-status.textContent = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · double-click: reset';
+if (cur.ds.steps.length > 1) preloadRest(loadToken); else status.textContent = HELP;
 render(performance.now());

@@ -1,2 +1,4 @@
 node_modules
 dist
+data/raw
+public/data/woa23/**/*.bin

@@ -7,28 +7,93 @@ export const RECT_COLORS = [[214, 48, 49], [230, 126, 34], [142, 68, 173], [233,
 const rgb = (c) => `rgb(${c})`;
 const M = { l: 44, r: 10, t: 10, b: 32 }; // plot margins in px
 
-// T-S diagram: 2D volume-weighted histogram plus rectangle and curve selection.
-// Coordinates exposed to callers are normalised (s, t) in [0,1]; t is up.
+// Diagram pairs. x / y are field indices (0 = T, 1 = S, 2 = O2) = channels of the volume texture, so the shader
+// can look up the pair with uVol[x], uVol[y]. Selections (rectangles, curve) belong to one pair.
+export const PAIRS = {
+  ts: { x: 1, y: 0, label: 'T–S' },
+  to: { x: 2, y: 0, label: 'T–O₂' },
+  so: { x: 2, y: 1, label: 'S–O₂' },
+};
+
+// 2D volume-weighted histograms of one time step for every pair: BINS x BINS, row = y bin, column = x bin.
+// Voxel weight = cos(lat) * layer thickness (approximate water volume). d = { t, s, o|null, mask }.
+export function buildHists(d, { nx, ny, nz, depth, lat0, dlat }) {
+  const hists = { ts: new Float32Array(BINS * BINS) };
+  if (d.o) { hists.to = new Float32Array(BINS * BINS); hists.so = new Float32Array(BINS * BINS); }
+  const { ts, to, so } = hists;
+  const dz = depth.map((_, i) => (depth[Math.min(i + 1, nz - 1)] - depth[Math.max(i - 1, 0)]) / 2);
+  let i = 0;
+  for (let k = 0; k < nz; k++)
+    for (let j = 0; j < ny; j++) {
+      const w = Math.cos(((lat0 + j * dlat) * Math.PI) / 180) * dz[k];
+      for (let x = 0; x < nx; x++, i++) {
+        if (!(d.mask[i] & 1)) continue; // bit0 = ocean
+        const bt = d.t[i] >> 8, bs = d.s[i] >> 8;
+        ts[bt * BINS + bs] += w;
+        if (to) { const bo = d.o[i] >> 8; to[bt * BINS + bo] += w; so[bs * BINS + bo] += w; }
+      }
+    }
+  return hists;
+}
+
+// "Nice" tick values (1, 2, 5 x 10^k) inside [lo, hi]
+function ticks(lo, hi, n = 4) {
+  const raw = (hi - lo) / n, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
+  const step = (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+  const out = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return out;
+}
+
+// Diagram panel: 2D histogram of the selected pair plus rectangle and curve selection.
+// info = { fields, names, units, ranges }. Coordinates exposed to callers are normalised (x, y) in [0,1]
+// over the global range of each field; y is up. Rectangles keep the historical names s0/s1 (x) and t0/t1 (y).
 export class TSPanel {
-  constructor(canvas, meta, tsData, onChange) {
+  constructor(canvas, info, onChange) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
-    this.meta = meta;
+    this.info = info;
     this.onChange = onChange;
     this.tool = 'rect';
-    this.rects = []; // {s0,t0,s1,t1,color}
-    this.curve = []; // [[s,t],...]
+    this.pairKey = 'ts';
+    this.sel = Object.fromEntries(Object.keys(PAIRS).map((k) => [k, { rects: [], curve: [] }]));
     this.showCurve = true;
     this.showRects = true;
     this.drag = null;
     this.theme = themeColors();
-    this.hist = this.buildHist(tsData);
+    this.hists = null;
+    this.histMax = null;
     this.histImg = this.renderHist();
     this.resize();
     canvas.addEventListener('pointerdown', (e) => this.down(e));
     canvas.addEventListener('pointermove', (e) => this.move(e));
     canvas.addEventListener('pointerup', () => this.up());
     new ResizeObserver(() => this.resize()).observe(canvas);
+  }
+
+  // selections of the active pair (the 3D view shows these)
+  get rects() { return this.sel[this.pairKey].rects; }
+  set rects(v) { this.sel[this.pairKey].rects = v; }
+  get curve() { return this.sel[this.pairKey].curve; }
+  set curve(v) { this.sel[this.pairKey].curve = v; }
+  get pair() { return PAIRS[this.pairKey]; }
+
+  // hists: { ts, to?, so? } of the step to show; max: optional { ts, to, so } normalisation (keeps brightness
+  // comparable between time steps)
+  setHists(hists, max = null) {
+    this.hists = hists;
+    this.histMax = max;
+    this.histImg = this.renderHist();
+    this.draw();
+  }
+
+  setPair(key) {
+    if (!PAIRS[key] || key === this.pairKey) return;
+    this.drag = null;
+    this.pairKey = key;
+    this.histImg = this.renderHist();
+    this.draw();
+    this.onChange();
   }
 
   // re-colour for a theme change
@@ -38,27 +103,12 @@ export class TSPanel {
     this.draw();
   }
 
-  buildHist({ t, s, mask }) {
-    const { nx, ny, nz, depth, lat0, dlat } = this.meta;
-    const h = new Float32Array(BINS * BINS);
-    const dz = depth.map((d, i) => (depth[Math.min(i + 1, nz - 1)] - depth[Math.max(i - 1, 0)]) / 2);
-    let i = 0;
-    for (let k = 0; k < nz; k++)
-      for (let j = 0; j < ny; j++) {
-        const w = Math.cos(((lat0 + j * dlat) * Math.PI) / 180) * dz[k];
-        for (let x = 0; x < nx; x++, i++) {
-          if (!mask[i]) continue;
-          h[Math.min(BINS - 1, (t[i] >> 8)) * BINS + Math.min(BINS - 1, s[i] >> 8)] += w;
-        }
-      }
-    return h;
-  }
-
   renderHist() {
     const img = new ImageData(BINS, BINS);
-    let max = 0;
-    for (const v of this.hist) max = Math.max(max, v);
-    const lmax = Math.log1p(max);
+    const hist = this.hists?.[this.pairKey];
+    let max = this.histMax?.[this.pairKey] ?? 0;
+    if (hist && !max) for (const v of hist) max = Math.max(max, v);
+    const lmax = Math.log1p(max) || 1;
     // light theme: accent background -> secondary -> primary; dark theme: -> primary -> tertiary
     const { bg, accentBg, primary, secondary, tertiary } = this.theme;
     const dark = bg[0] + bg[1] + bg[2] < 384;
@@ -69,8 +119,8 @@ export class TSPanel {
     };
     for (let ty = 0; ty < BINS; ty++)
       for (let sx = 0; sx < BINS; sx++) {
-        const v = Math.log1p(this.hist[ty * BINS + sx]) / lmax;
-        const o = ((BINS - 1 - ty) * BINS + sx) * 4; // flip so t is up
+        const v = hist ? Math.min(1, Math.log1p(hist[ty * BINS + sx]) / lmax) : 0;
+        const o = ((BINS - 1 - ty) * BINS + sx) * 4; // flip so y is up
         const c = v === 0 ? bg : ramp(0.15 + 0.85 * v);
         img.data.set([c[0], c[1], c[2], 255], o);
       }
@@ -143,14 +193,25 @@ export class TSPanel {
     this.onChange();
   }
 
+  // selection of the active pair
   setSelection(rects, curve) {
     this.rects = rects; this.curve = curve;
     this.draw();
     this.onChange();
   }
 
+  // all pairs: { ts: { rects, curve }, ... } (for save / load)
+  getSelections() { return structuredClone(this.sel); }
+  setSelections(sel) {
+    for (const k of Object.keys(PAIRS)) this.sel[k] = { rects: sel?.[k]?.rects ?? [], curve: sel?.[k]?.curve ?? [] };
+    this.draw();
+    this.onChange();
+  }
+
   draw() {
     const { ctx, w, h } = this;
+    const { fields, names, units, ranges } = this.info;
+    const { x: ix, y: iy } = this.pair;
     const [x0, y0] = this.toPx(0, 1), [x1, y1] = this.toPx(1, 0);
     const { bg, textLight, border } = this.theme;
     ctx.fillStyle = rgb(bg);
@@ -161,21 +222,15 @@ export class TSPanel {
     ctx.fillStyle = rgb(textLight); ctx.strokeStyle = rgb(border); ctx.lineWidth = 1;
     ctx.font = `11px ${getComputedStyle(this.cv).fontFamily}`;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-    const [tl, th] = this.meta.t_range, [sl, sh] = this.meta.s_range;
+    const [xl, xh] = ranges[fields[ix]], [yl, yh] = ranges[fields[iy]];
     ctx.textAlign = 'center';
-    for (let i = 0; i <= 4; i++) {
-      const f = i / 4, [px] = this.toPx(f, 0);
-      ctx.fillText((sl + f * (sh - sl)).toFixed(0), px, y1 + 13);
-    }
-    ctx.fillText('Salinity (PSU)', (x0 + x1) / 2, y1 + 27);
+    for (const v of ticks(xl, xh)) ctx.fillText(v, this.toPx((v - xl) / (xh - xl), 0)[0], y1 + 13);
+    ctx.fillText(`${names[ix]} (${units[ix]})`, (x0 + x1) / 2, y1 + 27);
     ctx.textAlign = 'right';
-    for (let i = 0; i <= 4; i++) {
-      const f = i / 4, [, py] = this.toPx(0, f);
-      ctx.fillText((tl + f * (th - tl)).toFixed(0), x0 - 5, py + 4);
-    }
+    for (const v of ticks(yl, yh)) ctx.fillText(v, x0 - 5, this.toPx(0, (v - yl) / (yh - yl))[1] + 4);
     ctx.save();
     ctx.translate(11, (y0 + y1) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center';
-    ctx.fillText('Temperature (°C)', 0, 0);
+    ctx.fillText(`${names[iy]} (${units[iy]})`, 0, 0);
     ctx.restore();
 
     const all = !this.showRects ? [] : this.drag && this.tool === 'rect' ? [...this.rects, this.drag] : this.rects;
@@ -192,7 +247,7 @@ export class TSPanel {
     }
   }
 
-  // 256x256 RGBA texture data for the T-S region transfer function (x = S, y = T)
+  // 256x256 RGBA texture data for the region transfer function of the active pair (x = first axis, y = second)
   regionTF(size = 256) {
     const data = new Uint8Array(size * size * 4);
     for (const r of this.rects) {
