@@ -77,6 +77,14 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - **2026-11-25** Added: per-step histograms + per-pair selections in the diagram panel (refactor), preload of all 12 months, play/pause with blending, diagram selector (T–S, T–O₂, S–O₂). Each step tested in headless Chromium (SwiftShader) on the real data:
   preload state (Play/slider disabled while loading, enabled after), playback (Feb→May seen at 4 months/s, Space pauses, label stable), switching back to Annual hides the controls, T–O₂ rectangle (low-oxygen box) + curve render fiber surfaces, S–O₂ starts empty, T–S default selection returns, save → reload → load restores dataset, month and pair; no JS errors.
 - **2026-11-25** Side effects: diagram axes now use nice tick values (0, 10, 20, … instead of rounded fractions); the stale "control polygon" hint was rewritten.
+- **2026-11-25 Full verification pass** (production build `npm run build` + `vite preview`, headless Chromium with software WebGL, real `woa23` data):
+  build OK; Python scripts compile; scenario scripts all passed with no JS errors: annual↔monthly switching, month slider, preload gating
+  (Play/slider disabled until 12/12), playback + Space pause, blend off, save → reload → load (dataset, month, pair, selections), T–O₂ and S–O₂ diagrams,
+  1D mode on oxygen/salinity with real-unit window label, slice mode (label 350 m at level 30 of monthly), clip slider.
+  Fallbacks: if `data/woa23/meta.json` is missing the app uses the legacy files (single dataset "Annual (legacy)", oxygen field and oxygen diagrams disabled);
+  an explicit `?data=bad/` shows "Could not load ocean data: …/meta.json: not JSON (file missing?)".
+  Not covered: a real GPU (frame rate, 0.4 GB monthly memory), other browsers, phones, light/dark theme switch, the Drive/CORS hosting path.
+  No automated test suite exists yet; these checks were ad-hoc Playwright scripts kept outside the repo.
 
 ## Data run status
 
