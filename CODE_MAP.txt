@@ -49,7 +49,7 @@ Files: vite.config.js (relative base so build can be hosted anywhere), package.j
 ---------------------------------------------------------------------------------
 PART 3. GPU SETUP & DATA UPLOAD  (src/main.js)
 ---------------------------------------------------------------------------------
- 3.1 Data loading         L10-18   fetch meta.json + t/s/mask bins in parallel (top-level await). No error handling.
+ 3.1 Data loading         L10-18   fetchBin() + meta.json + t/s/mask bins in parallel (top-level await). No error handling.
  3.2 WebGL2 init          L21-23   Gets context; shows message if unsupported.
  3.3 Shader program       L25-39   compile/link helper, `U` Proxy for uniform lookup (calls getUniformLocation every access).
  3.4 tex() helper         L41-52   Creates texture, linear filter, clamp-to-edge.
@@ -70,6 +70,8 @@ PART 4. CAMERA & INTERACTION  (src/main.js L111-192)
  4.3 Zoom to cursor       L159-175  Wheel zoom keeps point under cursor fixed; normalises deltaMode.
  4.4 Keyboard             L177-192  WASD/arrows move, R/F up/down, Q/E zoom; speed scales with distance.
  4.5 Low-res while moving L118-121, L294-298  interact() -> render at 0.5 scale for 200 ms; dirty-flag rendering.
+ 4.6 Input hygiene        L138, L140, L178-180  context menu suppressed, focus blurred on canvas press,
+                                   keys ignored while typing in INPUT/SELECT, key set cleared on window blur.
  Status: rotate / zoom / pan DONE. [P1]
 
 ---------------------------------------------------------------------------------
@@ -79,7 +81,7 @@ PART 5. T-S DIAGRAM PANEL  (src/ts.js, 206 lines)
  5.2 Histogram build      L41-55   2D T-S histogram, weighted by cos(lat) * layer thickness
                                    (i.e. approx. real water volume), ocean cells only.         [P3]
  5.3 Histogram render     L57-81   log scale colour ramp, theme-aware (light/dark), t flipped to point up.
- 5.4 Layout/coords        L83-100  resize w/ DPR, toPx(), fromEvent() -> normalised (s,t) in [0,1].
+ 5.4 Layout/coords        L83-100  resize w/ DPR (ResizeObserver, L31), toPx(), fromEvent() -> normalised (s,t) in [0,1].
  5.5 Rectangle tool       L102-137 Drag to make rectangle (min size 0.01, max 8), colours cycle.   [P4]
  5.6 Curve tool           L102-137 Freehand polyline, point spacing >0.02, max 64 points,
                                    <2 points discarded.                                        [P5]
@@ -178,3 +180,55 @@ SUGGESTED IMPROVEMENTS (priority order)
     prep.py ranges and config round-trip; remove stale doc references; add README screenshots + WOA23 citation.
  J. Evaluation material for the course: a few documented case studies (e.g. Mediterranean outflow,
     Antarctic Bottom Water) with saved configs, plus frame-time measurements.
+
+=================================================================================
+PART 10. USER INTERACTION MAP - ABSTRACTION LEVELS (high -> low)
+=================================================================================
+Levels
+ L0  User intent        "show me the Mediterranean outflow", "look inside", "save my view"
+ L1  UI widget          DOM element in index.html (sliders, checkboxes, T-S canvas, GL canvas, buttons)   [2.x]
+ L2  Event handler      listener that turns a DOM event into an action (main.js 4.x/7.x, ts.js 5.5-5.7)
+ L3  App state          cam{} (4.1), panel.rects / panel.curve (5.x), slider values (the DOM itself is the
+                        state store for controls), flags dirty / lastInteract / sdfKey
+ L4  GPU upload         uniforms + textures: applyControls (7.4), uploadSelection (7.2), curveSDF (3.8), render (8.1)
+ L5  Shader math        ray march, fiber sign-change test, SDF lookups (Part 6)
+ L6  Data               t/s/mask bins -> volume texture (Parts 1, 3.5)
+Flow is always L0->L6 on input and L5->screen on output; nothing talks back from the GL view to the T-S
+panel (no picking yet), so every interaction is a one-way chain.
+
+Interaction table (user action -> L1 widget -> L2 handler -> L3 state -> L4 upload -> L5 shader)
+ Rotate view         GL canvas drag      main.js pointermove 4.2      cam.az/el       render() 8.1 uEye/uFwd/..  march 6.5
+ Pan                 right/Shift drag    pointermove 4.2, pan()       cam.target      render() 8.1                march 6.5
+ Zoom to cursor      wheel               wheel 4.3, zoom()            cam.dist/target render() 8.1                march 6.5
+ Move by keys        WASD/arrows/R/F/Q/E keydown 4.4, moveByKeys()    cam.*           render() 8.1                march 6.5
+ Reset view          dblclick / Reset    4.2 / 7.7 reset              cam=HOME        render() 8.1                -
+ Draw rectangle      T-S canvas drag     ts.js down/move/up 5.5       panel.rects     uploadSelection 7.2 (regionTF 5.9, uRect*)   6.8, 6.11
+ Draw curve          T-S canvas drag     ts.js down/move/up 5.6       panel.curve     uploadSelection 7.2 (curveSDF 3.8, uSDF)     6.10
+ Clear rect/curve    2 buttons           main.js 7.3 -> panel.clear   rects/curve     uploadSelection 7.2         6.10/6.11
+ Switch tool         radio               main.js 7.3                  panel.tool      -                           -
+ 1D TF mode/field    selects + window    applyControls 7.4            DOM values      uMode/uField/uWin/uOpacity  6.7
+ Fill rectangles     checkbox            applyControls 7.4            DOM value       uFill, uRegions             6.8
+ Show fibers         2 checkboxes        applyControls 7.4 (+7.6 re-enable on draw)  uFiber, uRegions + panel.show*   6.10/6.11
+ Context/depth scale sliders             applyControls 7.4            DOM values      uContext, uD                6.13, toTex 6.4
+ Clip                6 sliders           applyControls 7.5            DOM values      uClipMin/uClipMax           inClip 6.4
+ Slice mode/depth    checkbox + slider   applyControls 7.4, 7.6       DOM values, cam.el  uSlice               6.6
+ Save / Load         buttons + file      7.7 / 7.8                    all of the above (JSON)  applyControls + setSelection   -
+ Theme change        OS setting          matchMedia 8.3               theme colours   uBg/uLand/uEdge, panel.refreshTheme  6.14
+Cross-cutting: every control change calls interact() -> half-resolution render for 200 ms (4.5).
+Expansion hooks (where new interaction should plug in): new widget -> index.html + `ids`/`checks` arrays
+(7.4/7.7: also makes it auto save/load); new T-S gesture -> ts.js down/move/up; new uniform -> shaders.js 6.3
++ applyControls 7.4; new 3D click action -> add pointer handler in 4.2 + ray-cast helper (does not exist yet).
+
+=================================================================================
+PART 11. COVERAGE AUDIT (is anything left out?)
+=================================================================================
+Checked every function, event listener and top-level block in main.js, ts.js, theme.js, shaders.js,
+prep.py, index.html and style.css against Parts 1-10. After this pass the map is complete for all
+first-party code. Items added in the audit: fetchBin (3.1), input hygiene (4.6), ResizeObserver (5.4).
+Not mapped on purpose: src/simple.css (vendored library), package-lock.json (generated), public/data/*.bin
+(generated outputs, described in Part 1).
+Global mutable state (for orientation): main.js - cam, drag, keys, dirty, lastInteract, lastScale, lastT, sdfKey;
+ts.js - TSPanel fields (rects, curve, tool, drag, show*, theme, hist). No other module state.
+Known smells seen while auditing (details in ROADMAP.txt): U Proxy re-queries uniform locations; DOM used as
+control-state store; ts.js imports limits from shaders.js; dead stale hint text ("control polygon") in index.html;
+panel.drag/curve share one field for two tools.

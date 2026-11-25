@@ -1,0 +1,156 @@
+OCEAN WATER MASS EXPLORER - IMPROVEMENT ROADMAP (feasibility, priority, affected code)
+=================================================================================
+Section IDs (3.5, 5.6, 6.10 ...) refer to CODE_MAP.txt.  Effort: S < 1 day, M 1-3 days, L > 3 days (one person).
+Feasibility: all items below are doable in the current WebGL2 + vanilla JS stack. Risks are noted per item.
+
+DATA CAVEAT (item F): I could NOT reach ncei.noaa.gov or data.nodc.noaa.gov from this session (hosts are not in
+the session's allowed network domains), so the WOA23 file list below is from a web search plus my own knowledge
+and MUST be verified on the NCEI page before committing to a design. To let me verify it, allow those two
+hosts in the environment's network settings; otherwise please check the points marked [VERIFY].
+
+---------------------------------------------------------------------------------
+1. YOUR SUGGESTIONS, EXPANDED AND ANALYSED
+---------------------------------------------------------------------------------
+A. Better colour map + legend  -- DOABLE, effort S
+   What: replace the 6-stop viridis-like ramp with selectable perceptual maps (viridis, cividis for colour-blind
+   safety; cmocean "thermal" for temperature and "haline" for salinity are the oceanographic convention). Add a
+   colour bar with real units (deg C / PSU) that follows the window min/max sliders, a legend listing each
+   rectangle's colour and the curve's colour, and a count colour bar for the T-S histogram.
+   Facts: the ramp is only used in 1D mode (6.7) and the histogram uses its own theme ramp (5.3); legend values
+   come from meta t_range/s_range (win -> lo + w*(hi-lo)).
+   Touches: 3.6 (colour map table), 2.3 + 2.7-2.9 (legend element/style), 7.4 (update legend on change),
+   5.3/5.8 (histogram colour bar). Shader unchanged.
+   Risk: none.
+
+B. Delete a single rectangle or curve -- DOABLE, effort S
+   What: select mode in the T-S panel (click inside a rectangle / near a curve), Delete key, plus a list in the
+   sidebar with per-item delete, hide and colour. Also move/resize handles (extension, effort +S).
+   Facts: rectangles are an array (5.x) so removal is trivial; colours are assigned by rects.length % 8 (5.5),
+   so after a deletion new rectangles can reuse a colour already in use -> pick the first unused colour.
+   Hit-testing needs a point-in-rect / point-to-polyline test in ts.js.
+   Touches: 5.5-5.7 (hit test, selection state), 7.2/7.3 (re-upload), 2.2 (list UI), 7.7/7.8 unaffected.
+   Risk: none.
+
+C. Multiple curves -- DOABLE, effort M
+   What: allow N curves (suggest N <= 4-8), each with its own colour, delete and visibility.
+   Facts: today there is one 512x512 RG16F distance texture (3.8) and the shader tests one curve per step (6.10).
+   Cleanest option: a sampler2DArray, one layer per curve (1 MB/layer), one sign-change test per layer per step.
+   Alternatives rejected: looping over polyline segments in the shader (64 segments x N curves x 320 steps is
+   too slow). Cost: the CPU SDF build is ~16M segment tests per curve (512*512*64), about 50-100 ms in JS; fine on
+   mouse-up but move it to a Web Worker or lower to 256x256 if curve editing becomes live.
+   Quality issue to fix at the same time: the SDF sign comes from the nearest segment, so at sharp kinks the sign
+   can flip off the curve and produce a spurious surface; mitigate by smoothing/resampling the curve or by using
+   a winding/cross-product test that is only trusted close to the curve.
+   Save format: curve -> curves[] (keep reading the old single-curve form).
+   Touches: 3.8, 3.9, 5.6-5.8, 6.3, 6.10, 7.2, 7.7/7.8, 2.2.
+   Risk: per-step cost grows linearly with N; check with item H.
+
+D. More fields: more 1D transfer functions and bivariate fields -- DOABLE, effort M-L
+   Which fields exist [VERIFY on NCEI]: WOA23 also offers dissolved oxygen, apparent oxygen utilisation (AOU),
+   oxygen saturation, phosphate, nitrate and silicate on the 1-degree grid (0.25-degree is temperature and
+   salinity only). Oxygen/nutrient coverage by depth and by month is smaller than T/S. Derived fields you can
+   compute offline in prep.py with the gsw (TEOS-10) package: potential density sigma-theta, conservative
+   temperature, absolute salinity, spice; density is the classic partner for T-S analysis.
+   Facts that make it cheap: the volume texture is RGBA16F with the 4th channel unused (3.5) -> one more field
+   costs no extra GPU memory; the mask can move to its own R8 texture and free another channel (4 fields in
+   one 53 MB texture, 8 in two). Per-field validity differs, so keep one mask per field group.
+   Bivariate: generalise the T-S panel to any pair (X, Y) with axis selectors; histogram rebuild is one pass
+   over 6.6M voxels (tens of ms); the 256x256 region texture, the SDF and the shader already work on a 2D value
+   pair, so the shader change is `st = vec2(v[uX], v[uY])` with uniform channel indices. Selections must store
+   their pair in the config. Combining selections made on different pairs (e.g. T-S rectangle AND T-O2 curve) is
+   possible as intersection/union but is a bigger design step -> do as phase 2.
+   Touches: Part 1 (prep.py multi-variable), 3.1, 3.5, 5.2-5.9, 6.3, 6.4 (sampleST), 6.7/6.8, 7.4, 7.7/7.8, 2.3.
+   Risks: repo/data size (each field is another 13 MB at 16-bit; see item G), different level counts per
+   variable, nutrient/oxygen holes in the data.
+
+E. Adaptive step size vs performance -- DOABLE, effort M (fiber part is the hard bit)
+   Today: 320 fixed steps, jitter, early exit at alpha > 0.98, half-resolution while interacting (6.5, 6.12, 4.5).
+   Options, ordered by benefit/cost:
+   1. Empty-space skipping with a coarse min/max brick texture (e.g. 8x8x8 bricks storing the T and S range;
+      for the current rectangles/curve, skip bricks whose (T,S) box cannot touch any selection or TF). Biggest win
+      for the fiber-only view because most ocean volume contributes nothing.
+   2. Adaptive step: large steps outside bricks of interest, small steps near the fiber (use |SDF| to size the step:
+      step = clamp(|f| * k, min, max) is a classic sphere-tracing-style bound once the SDF is Lipschitz in space).
+   3. Fiber refinement: after a sign change, 4-6 bisection iterations instead of one linear interpolation
+      (also fixes holes, see item 2.1).
+   4. User quality slider (steps 128/192/320/512) and a frame-time readout (needed for the report anyway).
+   5. Cache uniform locations (3.3) - removes per-frame getUniformLocation calls.
+   Touches: 6.5, 6.9-6.12, new brick-build step in 3.5, 3.3, 7.4 + index.html (quality control).
+   Risk: skipping bounds must be conservative or fibers disappear; verify with A/B screenshots.
+
+F. Multi-year / seasonal data and time animation -- DOABLE, effort L (biggest item)
+   What WOA23 provides [VERIFY]: it is a climatology product, not a raw time series. Per variable there are
+   annual, seasonal (4) and monthly (12) averages, for several averaging periods: seven decadal averages from
+   1955-1964 up to 2015-2022, an all-decades 1955-2022 average and climate normals; 1-degree and 0.25-degree
+   grids; netCDF files (netCDF-4 classic, CF-1.6). My recollection, to confirm: monthly T/S stop at 1500 m
+   (57 standard levels) while annual/seasonal reach 5500 m (102 levels).
+   So two different "time" animations are possible:
+     - seasonal cycle: 12 monthly steps (or 4 seasons) of one period. Shows how a fixed T-S selection
+       (e.g. a thermocline curve) moves through the year.
+     - decadal change: 7 decades, annual averages. Shows long-term warming/salinity change of a water mass.
+   Facts and costs: one T+S pair at 1 deg with 102 levels is 26 MB at 16-bit; monthly 57 levels is about 15 MB per
+   pair, i.e. ~180 MB for 12 months, so load lazily/streamed and keep only two steps on the GPU (current + next)
+   and lerp between them in the shader; use RG16F or 8-bit to shrink. The T-S histogram must follow time:
+   precompute a 256x256 histogram per step offline (256 KB each) instead of rebuilding in JS per frame. The depth
+   axis currently maps the level index uniformly (toTex, 6.4), so monthly (57 levels) and annual (102 levels)
+   data need an explicit depth-to-coordinate mapping to stay aligned. Masks differ per step (sea ice, data
+   coverage). Playback means redrawing every frame, which breaks the dirty-flag design (8.1) -> set dirty while
+   playing.
+   Touches: Part 1 (prep.py loops over files, writes t_<k>.bin, meta.time), 3.1 (lazy loading), 3.5 (two
+   textures + blend uniform), 5.2/5.3 (per-step histogram), 6.3/6.7/6.8 (lerp), 6.4 (depth mapping), 7.4, 7.7/7.8
+   (store time index), 8.1 (animation clock), 2.x (time slider + play/pause + period selector).
+   Risks: data volume and load time (host data outside git, see G), 0.25-degree is 16x larger -> stay at 1 degree.
+
+---------------------------------------------------------------------------------
+2. MY EARLIER SUGGESTIONS, RE-CHECKED
+---------------------------------------------------------------------------------
+ 2.1 Fiber quality: DOABLE, S-M. Sign change is tested only between consecutive samples and only when both are
+     within uBand*8 of the surface (6.10, 6.11): thin sheets or steep gradients can be skipped. Fix: bisection
+     refinement, adaptive step near the surface (shares work with item E).   Touches 6.10, 6.11.
+ 2.2 Real multidimensional TF: DOABLE, M. Per-rectangle opacity, feathered edges (smoothstep of sdBox instead of the
+     nearest-filtered texture) and gradient-based shading. Touches 3.7, 5.9, 6.8, 6.9, 6.3, 2.3.
+ 2.3 Complete the editable 1D TF (colour + opacity points): DOABLE, M. New small canvas editor, 256x1 RGBA
+     texture instead of the fixed cmap. Touches 3.6, 6.7, 7.4, 7.7, 2.3. (Merges with item A.)
+ 2.4 Linked 3D picking -> T-S point: DOABLE, M. Needs an inverse path: click -> ray -> first ocean hit -> sample
+     (T,S) on the CPU (data is already in JS arrays) -> mark on T-S panel and show lat/lon/depth readout.
+     Touches 4.2, 5.8, 8.1, new helper. Gives hover readout of T, S, depth for free.
+ 2.5 Performance and data size: see items E and G.
+ 2.6 Geographic context (coastlines, axes labels, true-metre depth): DOABLE, M. Depth currently follows level index,
+     so the thermocline is stretched; add a true-depth option. Coastlines can be drawn from the mask edges in the
+     shader or from a small GeoJSON overlay. Touches 6.4, 6.6, 6.13, 2.3.
+ 2.7 Code structure + tests + docs: DOABLE, S-M, no risk. Split main.js (gl, camera, controls, config), tests for
+     config round-trip and prep ranges, fix stale refs (docs/styles.md, "control polygon" hint), WOA23 citation.
+ 2.8 Case studies for the demo/report: DOABLE, S. Saved configs for e.g. Mediterranean outflow, Antarctic
+     Bottom Water, thermocline, plus frame-time numbers.
+ 2.9 G. Data size and robustness: DOABLE, S-M. 33 MB of raw bins in git; options: 8-bit storage, gzip served
+     with DecompressionStream, or Git LFS / release assets. Add fetch/WebGL error handling, config version field,
+     longitude seam at +-180 (CLAMP_TO_EDGE today). Touches Part 1, 3.1-3.2, 7.8.
+
+---------------------------------------------------------------------------------
+3. MERGED, PRIORITISED PLAN
+---------------------------------------------------------------------------------
+Ranking logic: first what protects the demo's core claim (fiber surfaces are correct), then what the proposal still
+lacks, then cheap usability wins, then the large data extensions. Items touching the same code are grouped.
+
+ P0  Must fix first (correctness of the headline feature)
+   1. Fiber refinement + sign/kink fix                       (2.1)       S-M   6.10, 6.11, 3.8
+ P1  Finish the proposal as written
+   2. Editable 1D TF + better colour maps + legend            (A, 2.3)    S-M   3.6, 6.7, 7.4, 2.3, 5.3
+   3. Delete / edit single rectangle or curve, selection list (B)         S     5.5-5.7, 7.2, 2.2
+   4. Real multidimensional TF (opacity, soft edges, shading) (2.2)       M     3.7, 5.9, 6.8, 6.9
+ P2  Features that make the project stand out
+   5. Multiple curves                                         (C)         M     3.8, 5.6, 6.10, 7.8
+   6. Linked 3D picking and hover readout                     (2.4)       M     4.2, 5.8, new helper
+   7. More fields + bivariate panel (start with sigma-theta and oxygen)  (D)  M-L  Part 1, 3.5, 5.x, 6.4
+   8. Performance: brick skipping, adaptive step, quality slider, frame-time readout  (E)  M   6.5, 3.3, 3.5
+ P3  Large extension, do when P0-P2 are stable
+   9. Seasonal cycle (12 months) first, decades second       (F)         L     Part 1, 3.x, 5.2, 6.x, 8.1
+ P4  Hygiene, run in parallel with everything
+  10. Data size/hosting, error handling, config versioning, module split, tests, README/citation, case studies
+                                                              (G, 2.7, 2.8) S-M
+Dependencies: item 8 should precede 9 (time animation needs the speed); item 7's panel generalisation should
+precede 5 if you want per-pair curves; item 3 precedes 5 (shared selection list UI); item 10 data hosting must be
+decided before 7 and 9 add more bins.
+Suggested split for two people: Person A = data + time + fields (items 7, 9, 10-data, Part 1, 3.x);
+Person B = rendering + interaction (items 1, 4, 5, 8, 6.x, 5.x UI). Items 2, 3, 6 are small and can go to whoever
+finishes first.
