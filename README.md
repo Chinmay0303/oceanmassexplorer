@@ -52,7 +52,7 @@ If the data is missing, the app falls back to the old annual temperature/salinit
 - **Quality** (Volume section): Fast / Normal / High sets the number of ray-march steps; High gives the most exact surfaces.
 - **Picking**: click the ocean in the 3D view to read temperature, salinity, oxygen, position and the selections containing the point;
   the point is marked in the diagram and pinned in 3D (Esc or a click on empty space clears it).
-- Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.
+- Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom; Reset view button or the Home key resets it.
 
 ## More
 
