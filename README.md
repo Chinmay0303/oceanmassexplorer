@@ -15,6 +15,9 @@ whose selections (rectangles and a curve) extract fiber surfaces in the 3D volum
 The new multi-field, annual + monthly pipeline (temperature, salinity, oxygen, 1971-2000) writes to
 `public/data/woa23` and is not wired into the app yet. See `log.md` for the decisions.
 
+The generated `.bin` files are not in git (341 MB). Get them from the team's Google Drive folder (link in `log.md`)
+and unpack into `public/data/woa23/`, or regenerate:
+
     pip install numpy scipy netCDF4
     python tools/download.py data/raw        # 39 NetCDF files from NCEI, > 1 GB
     python tools/prep.py data/raw public/data/woa23

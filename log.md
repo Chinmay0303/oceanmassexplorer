@@ -25,6 +25,7 @@ Date of the first entries: 2026-11-25.
 | D7 | Storage: **uint16**, planar `[field][depth][lat][lon]`, one file per time step | Same idea as the old format (13.2 MB per annual field). Monthly ≈ 22 MB per step, ≈ 266 MB for 12 months before compression. |
 | D8 | New data goes to `public/data/woa23/` (own `meta.json`); old `public/data/*` untouched | The app still reads the old files; overwriting would break it until the frontend is migrated. |
 | D9 | "Monthly" is a **climatology** (mean of each month over 1971–2000), not a time series | Animation shows a typical seasonal cycle. Say "monthly climatology" in the UI. |
+| D10 | Data **hosted on Google Drive** (link shared with the team), **not in git**. `public/data/woa23/**/*.bin` is git-ignored; only `meta.json` is committed | Monthly+annual binaries are 341 MB (163 MB as .tar.gz); committing them would bloat the repo permanently. |
 
 ## Findings about the existing code (first review)
 
@@ -58,20 +59,28 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - **2026-11-25** NCEI hosts (`www.ncei.noaa.gov`, `data.nodc.noaa.gov`) were unreachable from the cloud session (proxy 403 / DNS), so dataset facts were taken from the user's PDF + screenshots instead.
 - **2026-11-25** Decisions D1–D9 made. Wrote `tools/download.py` and rewrote `tools/prep.py` (annual + monthly, t/s/o). Updated `.gitignore` (`data/raw`), README, CODE_MAP Part 1.
 
-## Data run status (read this before trusting `public/data/woa23`)
+- **2026-11-25** NCEI allowed by user; real download + prep run succeeded (details in *Data run status*). User chose Google Drive for hosting (D10).
 
-- `tools/prep.py` was **tested on synthetic NetCDF files** shaped like WOA23 (39 files, correct dims/depths, holes in oxygen):
-  correct output sizes, masks, ranges, meta.json, and a clear error when inputs are missing. Synthetic data was **not** committed.
-- It has **not been run on the real WOA23 files**: the session's network policy blocks `www.ncei.noaa.gov` (HTTP 403 from the agent proxy).
-  Consequently `public/data/woa23/` does **not exist yet**.
-- To finish: allow `www.ncei.noaa.gov` in the cloud environment's network settings (or run on a laptop), then
-  `python tools/download.py data/raw && python tools/prep.py data/raw public/data/woa23`.
-- Unverified: the download URL layout in `tools/download.py` (`…/WOA23/DATA/<variable>/netcdf/decav71A0/1.00/…`). If NCEI answers 404, fix `BASE`/`url()`.
-  If the server splits files differently, only `download.py` needs changing; `prep.py` just needs the 39 files in one folder.
+## Data run status
+
+- **2026-11-25: real run done.** `www.ncei.noaa.gov` was allowed; `tools/download.py` fetched all 39 files (1.5 GB) with the
+  URL layout as written (it was correct), then `tools/prep.py data/raw public/data/woa23` ran in ~26 s.
+- Output `public/data/woa23/`: 341 MB (annual 3 fields ≈ 40 MB + mask; monthly 12 × ~22 MB + masks), 163 MB as tar.gz.
+  Generated locally in the cloud session; **the .bin files are not in git** (D10), so a teammate must get them from Drive
+  or regenerate (download + prep, ~10 min).
+- Verified in the real files: `*_an` shape (1, 102|57, 180, 360); oxygen units **µmol/kg**; titles say "1971-2000 1.00 degree";
+  monthly depth axis = first 57 annual levels (prep asserts it).
+- **Global ranges** (shared by annual and monthly): T −3…36 °C, S 4…44, O₂ 0…722 µmol/kg.
+- **Ocean fraction** (voxels with T and S valid): annual 0.500 (6.6M voxels incl. the deep ocean), monthly 0.591 (only top 1500 m).
+  **Oxygen coverage of ocean cells: 100 %** in every step — no oxygen holes, so a per-field validity mask is not needed in the renderer.
+- Annual actual value spread (99.99th percentile): T up to ~29, S 7.5–40.4, O₂ up to ~420. Monthly maxima are higher (T 33 °C, O₂ 552 in July).
+  The global ranges are wider than the annual data, so annual selections use a slightly smaller part of the axes. See open questions.
+- Old files: `public/data/{t,s,mask}.bin` (legacy, unknown span) are still what the app reads. Nothing in the app uses `woa23` yet.
+- Synthetic-data testing earlier (before the real run) was only used to check the script; none of that data was committed.
 
 ## Open questions / TODO
 
-- Where to host the data? Monthly is ≈ 266 MB (uint16) — too heavy for git. Options: 8-bit + gzip, GitHub release assets, Git LFS, or generate on build. Decide before committing `woa23`.
-- How much oxygen is missing inside the ocean? `prep.py` prints `oxygen coverage of ocean` per step (stored in `meta.json` → `stats`); look at it after the first real run.
-- Check oxygen units in the real file (`o_an:units`, expected µmol/kg) and put them on the axis label.
+- Upload the `woa23` data to Google Drive and put the shared link in README + here (the cloud session cannot upload to Drive; use the tar.gz or run prep locally). The app will need a configurable data base URL (Drive links do not allow direct CORS fetches, so we may need a direct-download host, e.g. GitHub release assets, for the deployed app; Drive is fine for the team to fetch files into `public/data/woa23` by hand).
+- Should the global ranges be clipped (e.g. to 99.99th percentile) to use the T-S/T-O axes better? Coastal extremes (T 36, S 44, O₂ 722) stretch them; the 256-bin histogram resolution is ~0.15 °C in T.
+- Oxygen units µmol/kg confirmed; put them on the axis label.
 - Frontend migration to the new data layout (dataset selector, time slider, play/pause) — not started.
