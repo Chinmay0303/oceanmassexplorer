@@ -22,9 +22,11 @@
     <div class="row">
       <div class="check"><input id="toolRect" type="radio" name="tool" value="rect" checked><label for="toolRect">Rectangle</label></div>
       <div class="check"><input id="toolCurve" type="radio" name="tool" value="curve"><label for="toolCurve">Curve</label></div>
+      <div class="check"><input id="toolSelect" type="radio" name="tool" value="select"><label for="toolSelect">Select</label></div>
     </div>
-    <div class="row"><button id="clearRects">Clear rectangles</button><button id="clearCurve">Clear curve</button></div>
-    <p class="hint">Drag in the diagram to draw. A rectangle selects a region (its boundary surface is shown), a curve extracts a fiber surface. Up to 8 rectangles. Each diagram keeps its own selections; the 3D view shows the ones of the diagram chosen above.</p>
+    <ul id="selList" class="sellist"></ul>
+    <div class="row"><button id="deleteAll">Delete all</button></div>
+    <p class="hint">Rectangle / Curve: drag in the diagram to draw (up to 8 rectangles and 4 curves). Select: click an item to select it, drag to move it, drag a corner to resize it, Delete key removes it. A rectangle is drawn in 3D as a surface, a volume or both (list). The 3D view shows the selections of the diagram chosen above.</p>
   </section>
 
   <details open>
@@ -42,8 +44,7 @@
 
   <details open>
     <summary>Volume</summary>
-    <div class="field"><label for="mode">Mode</label>
-      <select id="mode"><option value="0">1D transfer function</option><option value="1" selected>T-S regions</option></select></div>
+    <div class="check"><input id="tf1d" type="checkbox"><label for="tf1d">Colour the ocean by one field (1D transfer function)</label></div>
     <div class="field"><label for="field">Field</label>
       <select id="field"><option value="0">Temperature</option><option value="1">Salinity</option><option value="2">Dissolved oxygen</option></select></div>
     <div class="field"><label for="cmap">Colour map</label><select id="cmap"></select></div>
@@ -51,12 +52,9 @@
     <div class="field"><label for="winHi">Window max</label><input id="winHi" type="range" min="0" max="1" step="0.005" value="1"></div>
     <p class="hint" id="winLabel"></p>
     <canvas id="cbar" aria-label="Colour legend"></canvas>
-    <div class="field"><label for="opacity">Opacity</label><input id="opacity" type="range" min="0.02" max="1" step="0.01" value="0.4"></div>
+    <div class="field"><label for="opacity">Volume opacity</label><input id="opacity" type="range" min="0.02" max="1" step="0.01" value="0.4"></div>
     <div class="field"><label for="context">Ocean context</label><input id="context" type="range" min="0" max="1" step="0.01" value="0.8"></div>
     <div class="field"><label for="depthScale">Depth scale</label><input id="depthScale" type="range" min="0.05" max="0.6" step="0.01" value="0.25"></div>
-    <div class="check"><input id="regions" type="checkbox" checked><label for="regions">Show rectangle fiber surfaces</label></div>
-    <div class="check"><input id="fill" type="checkbox"><label for="fill">Also fill rectangles (volume, T-S regions mode)</label></div>
-    <div class="check"><input id="fiber" type="checkbox" checked><label for="fiber">Show fiber surface and curve</label></div>
   </details>
 
   <details open>

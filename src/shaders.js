@@ -28,7 +28,7 @@ uniform sampler2D uSDF;   // signed distance to the T-S curve (r), 1 where the n
 uniform vec3 uEye, uRight, uUp, uFwd;
 uniform float uTan, uAspect, uD;
 uniform vec3 uClipMin, uClipMax;
-uniform int uMode;        // 0 = 1D transfer function, 1 = T-S regions
+uniform bool uTF1D;       // colour the ocean by one field (1D transfer function)
 uniform ivec2 uPair;      // channels of uVol that form the diagram's (x, y): (1,0) = (S,T), (2,0) = (O2,T), (2,1) = (O2,S)
 uniform int uField;       // 0 = T, 1 = S, 2 = O2 (1D mode); indexes the channels of uVol
 uniform vec2 uWin;
@@ -36,9 +36,7 @@ uniform float uOpacity;
 uniform float uContext;  // strength of the lit background ocean body
 uniform int uNCurve;
 uniform float uSlice;     // depth texture coordinate of the slice, < 0 = off
-uniform bool uFiber;
-uniform bool uRegions;    // show the T-S rectangles
-uniform bool uFill;       // also fill the rectangles as a volume (T-S transfer function)
+uniform bool uFill;       // some rectangles are drawn as a volume (region transfer function uTF2)
 uniform int uNRect;
 uniform vec4 uRect[${MAX_RECTS}];       // closed control polygons: centre (S, T), half size
 uniform vec3 uRectColor[${MAX_RECTS}];
@@ -141,20 +139,19 @@ void main() {
       col = uLand;
       if (inClip(tc) && sampleST(tc, st)) {
         col = OCEAN_MID;
-        if (uMode == 0) {
+        if (uTF1D) {
           float w = (vol(tc)[uField] - uWin.x) / (uWin.y - uWin.x);
           if (w >= 0.0 && w <= 1.0) col = texture(uTF1, vec2(w, 0.5)).rgb;
-        } else {
-          vec4 c = uRegions && uFill ? texture(uTF2, st) : vec4(0.0);
+        }
+        if (uFill) {
+          vec4 c = texture(uTF2, st);
           col = mix(col, c.rgb, c.a * 0.9);
         }
-        if (uRegions) {  // rectangle outlines: the fiber surfaces cut by the slice
-          for (int i = 0; i < ${MAX_RECTS}; i++) {
-            if (i >= uNRect) break;
-            col = mix(uRectColor[i], col, smoothstep(uBand * 0.5, uBand * 1.5, abs(sdBox(st, i))));
-          }
+        for (int i = 0; i < ${MAX_RECTS}; i++) {  // rectangle outlines: the fiber surfaces cut by the slice
+          if (i >= uNRect) break;
+          col = mix(uRectColor[i], col, smoothstep(uBand * 0.5, uBand * 1.5, abs(sdBox(st, i))));
         }
-        if (uFiber && uNCurve > 1) {
+        if (uNCurve > 1) {
           bool e;
           float f = abs(curveDist(st, e));
           if (!e) col = mix(uFiberColor, col, smoothstep(uBand * 0.5, uBand * 1.5, f));
@@ -191,19 +188,23 @@ void main() {
     if (ok) {
       if (!hit) { hit = true; hitP = p; }
       vec4 c = vec4(0.0);
-      if (uMode == 0) {
+      if (uTF1D) {
         float v = vol(tc)[uField];
         float w = (v - uWin.x) / (uWin.y - uWin.x);
         if (w >= 0.0 && w <= 1.0) c = vec4(texture(uTF1, vec2(w, 0.5)).rgb, uOpacity);
-      } else {
-        c = uRegions && uFill ? texture(uTF2, st) : vec4(0.0);
-        c.a *= uOpacity;
+      }
+      if (uFill) {  // rectangle volumes on top of the 1D colouring (same sample, 'over' operator)
+        vec4 r = texture(uTF2, st);
+        r.a *= uOpacity;
+        float a0 = r.a + c.a * (1.0 - r.a);
+        if (a0 > 0.0) c.rgb = (r.rgb * r.a + c.rgb * c.a * (1.0 - r.a)) / a0;
+        c.a = a0;
       }
       float a = 1.0 - exp(-c.a * dt * 60.0);
       acc.rgb += (1.0 - acc.a) * a * c.rgb;
       acc.a += (1.0 - acc.a) * a;
 
-      if (uFiber && uNCurve > 1) {
+      if (uNCurve > 1) {
         bool edge;
         float f = curveDist(st, edge);
         if (prevOk && !edge && !prevEdge && f * fPrev < 0.0 && abs(f) < uBand * 8.0 && abs(fPrev) < uBand * 8.0) {
@@ -215,7 +216,7 @@ void main() {
         }
         fPrev = f; prevEdge = edge;
       }
-      if (uRegions && prevOk) {  // closed rectangles: same sign-change test as the curve
+      if (prevOk) {  // closed rectangles: same sign-change test as the curve
         for (int i = 0; i < ${MAX_RECTS}; i++) {
           if (i >= uNRect) break;
           float f = sdBox(st, i), fp = sdBox(stPrev, i);

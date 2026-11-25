@@ -53,18 +53,17 @@ export function niceTicks(lo, hi, n = 4) {
 // info = { fields, names, units, ranges }. Coordinates exposed to callers are normalised (x, y) in [0,1]
 // over the global range of each field; y is up. Rectangles keep the historical names s0/s1 (x) and t0/t1 (y).
 export class TSPanel {
-  constructor(canvas, info, onChange) {
+  constructor(canvas, info, onChange, onSelect = () => {}) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
     this.info = info;
-    this.onChange = onChange;
+    this.onChange = onChange;   // selections changed: update the 3D view
+    this.onSelect = onSelect;   // selected item or active diagram changed: update the list
     this.tool = 'rect';
     this.pairKey = 'ts';
     this.items = [];
     this.nextId = 1;
     this.selectedId = null;
-    this.showCurve = true;
-    this.showRects = true;
     this.drag = null;
     this.theme = themeColors();
     this.cmapChoice = 'auto';  // colour-map choice of the 1D transfer function (colours the axis strips)
@@ -75,6 +74,7 @@ export class TSPanel {
     canvas.addEventListener('pointerdown', (e) => this.down(e));
     canvas.addEventListener('pointermove', (e) => this.move(e));
     canvas.addEventListener('pointerup', () => this.up());
+    canvas.addEventListener('pointerleave', () => { if (!this.drag) this.cv.style.cursor = this.tool === 'select' ? 'default' : 'crosshair'; });
     new ResizeObserver(() => this.resize()).observe(canvas);
   }
 
@@ -83,7 +83,9 @@ export class TSPanel {
   // The diagram shows the items of the active pair; `rects` / `curve` are what the 3D view draws at the moment.
   get pair() { return PAIRS[this.pairKey]; }
   get rects() { return this.items.filter((i) => i.kind === 'rect' && i.pair === this.pairKey); }
-  get curveItem() { return this.items.find((i) => i.kind === 'curve' && i.pair === this.pairKey && i.points.length > 1) ?? null; }
+  get surfaceRects() { return this.rects.filter((i) => i.visible && i.style !== 'volume'); }   // boundary surfaces in 3D
+  get volumeRects() { return this.rects.filter((i) => i.visible && i.style !== 'surface'); }   // translucent volumes in 3D
+  get curveItem() { return this.items.find((i) => i.kind === 'curve' && i.pair === this.pairKey && i.visible && i.points.length > 1) ?? null; }
   get curve() { return this.curveItem?.points ?? []; }
 
   nextColor() {
@@ -111,6 +113,39 @@ export class TSPanel {
     this.onChange();
   }
 
+  clearAll() {
+    this.items = [];
+    this.selectedId = null;
+    this.draw();
+    this.onChange();
+  }
+
+  deleteSelected() { if (this.selectedId != null) this.remove(this.selectedId); }
+
+  // select an item (switches the active diagram when it belongs to another one)
+  select(id) {
+    const it = this.items.find((i) => i.id === id);
+    if (it && it.pair !== this.pairKey) this.setPair(it.pair);
+    this.selectedId = it ? id : null;
+    this.draw();
+    this.onSelect();
+  }
+
+  setVisible(id, visible) { this.edit(id, { visible }); }
+  setStyle(id, style) { this.edit(id, { style }); }
+  edit(id, patch) {
+    const it = this.items.find((i) => i.id === id);
+    if (!it) return;
+    Object.assign(it, patch);
+    this.draw();
+    this.onChange();
+  }
+
+  setTool(tool) {
+    this.tool = tool;
+    this.cv.style.cursor = tool === 'select' ? 'default' : 'crosshair';
+  }
+
   // hists: { ts, to?, so? } of the step to show; max: optional { ts, to, so } normalisation (keeps brightness
   // comparable between time steps)
   setHists(hists, max = null) {
@@ -124,9 +159,11 @@ export class TSPanel {
     if (!PAIRS[key] || key === this.pairKey) return;
     this.drag = null;
     this.pairKey = key;
+    if (!this.items.some((i) => i.id === this.selectedId && i.pair === key)) this.selectedId = null;
     this.histImg = this.renderHist();
     this.draw();
     this.onChange();
+    this.onSelect();
   }
 
   // re-colour for a theme change
@@ -212,16 +249,83 @@ export class TSPanel {
     return [Math.min(1, Math.max(0, s)), Math.min(1, Math.max(0, t))];
   }
 
+  // ---- select tool: hit test, move, resize ----
+  // hit = { item, corner } for the item under the pointer (corner = 'nw' | 'ne' | 'sw' | 'se' for a handle of the selected rectangle)
+  hitTest(e) {
+    const r = this.cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    const mine = this.items.filter((i) => i.pair === this.pairKey);
+    const sel = mine.find((i) => i.id === this.selectedId && i.kind === 'rect');
+    if (sel) {
+      const corners = { nw: [sel.s0, sel.t1], ne: [sel.s1, sel.t1], sw: [sel.s0, sel.t0], se: [sel.s1, sel.t0] };
+      for (const [name, [s, t]] of Object.entries(corners)) {
+        const [x, y] = this.toPx(s, t);
+        if (Math.hypot(px - x, py - y) <= 8) return { item: sel, corner: name };
+      }
+    }
+    for (const it of [...mine].reverse()) {
+      if (it.kind === 'rect') {
+        const [a, b] = this.toPx(it.s0, it.t1), [c, d] = this.toPx(it.s1, it.t0);
+        if (px >= a - 3 && px <= c + 3 && py >= b - 3 && py <= d + 3) return { item: it, corner: null };
+      } else {
+        for (let k = 0; k < it.points.length - 1; k++) {
+          const [ax, ay] = this.toPx(...it.points[k]), [bx, by] = this.toPx(...it.points[k + 1]);
+          const l2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1, u = Math.min(1, Math.max(0, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2));
+          if (Math.hypot(px - (ax + u * (bx - ax)), py - (ay + u * (by - ay))) <= 7) return { item: it, corner: null };
+        }
+      }
+    }
+    return null;
+  }
+
+  // apply the current select-tool drag to its item
+  editDrag(p) {
+    const d = this.drag, it = this.items.find((i) => i.id === d.id);
+    if (!it) return;
+    const o = d.orig, dx = p[0] - d.start[0], dy = p[1] - d.start[1], clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    if (it.kind === 'rect' && d.corner) {  // resize: the opposite corner stays fixed
+      const ax = d.corner.includes('w') ? o.s1 : o.s0, ay = d.corner.includes('n') ? o.t0 : o.t1;
+      it.s0 = Math.min(ax, p[0]); it.s1 = Math.max(ax, p[0]);
+      it.t0 = Math.min(ay, p[1]); it.t1 = Math.max(ay, p[1]);
+      if (it.s1 - it.s0 < 0.01) { it.s0 = o.s0; it.s1 = o.s1; }
+      if (it.t1 - it.t0 < 0.01) { it.t0 = o.t0; it.t1 = o.t1; }
+    } else if (it.kind === 'rect') {  // move, kept inside the diagram
+      const mx = clamp(dx, -o.s0, 1 - o.s1), my = clamp(dy, -o.t0, 1 - o.t1);
+      it.s0 = o.s0 + mx; it.s1 = o.s1 + mx; it.t0 = o.t0 + my; it.t1 = o.t1 + my;
+    } else {
+      const xs = o.points.map((q) => q[0]), ys = o.points.map((q) => q[1]);
+      const mx = clamp(dx, -Math.min(...xs), 1 - Math.max(...xs)), my = clamp(dy, -Math.min(...ys), 1 - Math.max(...ys));
+      it.points = o.points.map(([x, y]) => [x + mx, y + my]);
+    }
+    d.moved = true;
+  }
+
   down(e) {
     this.cv.setPointerCapture(e.pointerId);
     const p = this.fromEvent(e);
+    if (this.tool === 'select') {
+      const h = this.hitTest(e);
+      this.selectedId = h ? h.item.id : null;
+      if (h) this.drag = { edit: true, id: h.item.id, corner: h.corner, start: p, orig: structuredClone(h.item), moved: false };
+      this.draw();
+      this.onSelect();
+      return;
+    }
+    this.selectedId = null;
+    this.onSelect();
     this.drag = this.tool === 'rect' ? { s0: p[0], t0: p[1], s1: p[0], t1: p[1], color: this.nextColor() } : { points: [p] };
   }
 
   move(e) {
-    if (!this.drag) return;
+    if (!this.drag) {
+      if (this.tool === 'select') {
+        const h = this.hitTest(e);
+        this.cv.style.cursor = !h ? 'default' : h.corner ? (h.corner === 'nw' || h.corner === 'se' ? 'nwse-resize' : 'nesw-resize') : 'move';
+      }
+      return;
+    }
     const p = this.fromEvent(e);
-    if (this.tool === 'rect') {
+    if (this.drag.edit) this.editDrag(p);
+    else if (this.tool === 'rect') {
       this.drag.s1 = p[0]; this.drag.t1 = p[1];
     } else {
       const q = this.drag.points[this.drag.points.length - 1];
@@ -234,21 +338,17 @@ export class TSPanel {
     if (!this.drag) return;
     const d = this.drag;
     this.drag = null;
+    if (d.edit) {
+      this.draw();
+      if (d.moved) this.onChange();  // the 3D view is updated once, when the drag ends
+      return;
+    }
     if (this.tool === 'rect') {
       if (Math.abs(d.s1 - d.s0) > 0.01 && Math.abs(d.t1 - d.t0) > 0.01)
         this.add('rect', { s0: Math.min(d.s0, d.s1), s1: Math.max(d.s0, d.s1), t0: Math.min(d.t0, d.t1), t1: Math.max(d.t0, d.t1), color: d.color });
     } else if (d.points.length > 1) {
       this.add('curve', { points: d.points });
     }
-    this.draw();
-    this.onChange();
-  }
-
-  // delete all rectangles or all curves of the active pair
-  clear(what) {
-    const kind = what === 'rects' ? 'rect' : 'curve';
-    this.items = this.items.filter((i) => !(i.kind === kind && i.pair === this.pairKey));
-    if (!this.items.some((i) => i.id === this.selectedId)) this.selectedId = null;
     this.draw();
     this.onChange();
   }
@@ -304,30 +404,40 @@ export class TSPanel {
     ctx.restore();
 
     const mine = this.items.filter((i) => i.pair === this.pairKey);
-    if (this.showRects) {
-      const live = this.drag && this.tool === 'rect' ? [{ ...this.drag, visible: true }] : [];
-      for (const r of [...mine.filter((i) => i.kind === 'rect'), ...live]) {
-        const [a, b] = this.toPx(r.s0, r.t1), [c, d] = this.toPx(r.s1, r.t0);
-        ctx.fillStyle = `rgba(${r.color},0.25)`; ctx.strokeStyle = `rgb(${r.color})`; ctx.lineWidth = 2;
-        ctx.fillRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
-        ctx.strokeRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+    const liveRect = this.drag && !this.drag.edit && this.tool === 'rect' ? [{ ...this.drag, visible: true, style: 'surface', kind: 'rect' }] : [];
+    for (const r of [...mine.filter((i) => i.kind === 'rect'), ...liveRect]) {
+      const [a, b] = this.toPx(r.s0, r.t1), [c, d] = this.toPx(r.s1, r.t0), on = r.id === this.selectedId;
+      ctx.globalAlpha = r.visible ? 1 : 0.35;
+      ctx.setLineDash(r.visible ? [] : [4, 3]);
+      ctx.fillStyle = `rgba(${r.color},${r.style === 'surface' ? 0.15 : 0.35})`; ctx.strokeStyle = `rgb(${r.color})`; ctx.lineWidth = on ? 3.5 : 2;
+      ctx.fillRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+      ctx.strokeRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+      if (on) {  // resize handles
+        ctx.setLineDash([]); ctx.fillStyle = rgb(bg); ctx.lineWidth = 2;
+        for (const [hx, hy] of [[a, b], [c, b], [a, d], [c, d]]) { ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
       }
     }
-    if (this.showCurve) {
-      const live = this.drag?.points ? [{ points: this.drag.points, color: this.nextColor() }] : [];
-      for (const c of [...mine.filter((i) => i.kind === 'curve'), ...live]) {
-        ctx.strokeStyle = rgb(c.color); ctx.lineWidth = 2; ctx.beginPath();
-        c.points.forEach(([s, t], i) => { const [px, py] = this.toPx(s, t); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
-        ctx.stroke();
+    const liveCurve = this.drag?.points ? [{ points: this.drag.points, color: this.nextColor(), visible: true }] : [];
+    for (const c of [...mine.filter((i) => i.kind === 'curve'), ...liveCurve]) {
+      const on = c.id === this.selectedId;
+      ctx.globalAlpha = c.visible ? 1 : 0.35;
+      ctx.setLineDash(c.visible ? [] : [4, 3]);
+      ctx.strokeStyle = rgb(c.color); ctx.lineWidth = on ? 3.5 : 2; ctx.beginPath();
+      c.points.forEach(([s, t], i) => { const [px, py] = this.toPx(s, t); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+      ctx.stroke();
+      if (on) {
+        ctx.setLineDash([]); ctx.fillStyle = rgb(c.color);
+        for (const [s, t] of c.points) { const [px, py] = this.toPx(s, t); ctx.beginPath(); ctx.arc(px, py, 3, 0, 6.3); ctx.fill(); }
       }
     }
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
     this.drawLegend();
   }
 
-  // 256x256 RGBA texture data for the region transfer function of the active pair (x = first axis, y = second)
+  // 256x256 RGBA texture data for the region transfer function (rectangles drawn as volumes) of the active pair
   regionTF(size = 256) {
     const data = new Uint8Array(size * size * 4);
-    for (const r of this.rects) {
+    for (const r of this.volumeRects) {
       const sa = Math.floor(r.s0 * size), sb = Math.ceil(r.s1 * size);
       const ta = Math.floor(r.t0 * size), tb = Math.ceil(r.t1 * size);
       for (let ty = ta; ty < tb && ty < size; ty++)

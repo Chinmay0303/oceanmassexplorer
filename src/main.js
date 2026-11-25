@@ -7,6 +7,7 @@ import { themeColors, CURVE_RGB } from './theme.js';
 import { openData } from './data.js';
 import { colormapTable, mapName, CHOICES } from './colormaps.js';
 import { drawColorbar } from './legend.js';
+import { renderSelections } from './selections-ui.js';
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
@@ -228,7 +229,10 @@ function moveByKeys(dt) {
 }
 
 // ---------- T-S panel ----------
-const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, units: meta.units, ranges: meta.ranges }, () => { uploadSelection(); redraw(); });
+const renderList = () => renderSelections($('selList'), panel);
+const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, units: meta.units, ranges: meta.ranges },
+  () => { uploadSelection(); redraw(); renderList(); },                  // selections changed
+  () => { $('pair').value = panel.pairKey; renderList(); });             // selection or diagram changed
 panel.setHists(cur.hists[0], cur.histMax);
 
 function uploadSelection() {
@@ -246,7 +250,8 @@ function uploadSelection() {
   gl.uniform2i(U.uPair, panel.pair.x, panel.pair.y);
   gl.uniform3fv(U.uFiberColor, (panel.curveItem?.color ?? CURVE_RGB).map((c) => c / 255));
   gl.uniform1i(U.uNCurve, n);
-  const rects = panel.rects.slice(0, MAX_RECTS);
+  gl.uniform1i(U.uFill, panel.volumeRects.length ? 1 : 0);  // rectangles drawn as volumes
+  const rects = panel.surfaceRects.slice(0, MAX_RECTS);   // rectangles drawn as surfaces
   const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3);
   rects.forEach((r, i) => {
     box.set([(r.s0 + r.s1) / 2, (r.t0 + r.t1) / 2, (r.s1 - r.s0) / 2, (r.t1 - r.t0) / 2], i * 4);
@@ -259,15 +264,25 @@ function uploadSelection() {
 
 $('pair').addEventListener('change', () => panel.setPair($('pair').value));
 [...$('pair').options].forEach((o) => { o.disabled = PAIRS[o.value].x >= meta.fields.length; });  // oxygen pairs need the oxygen field
-document.querySelectorAll('input[name=tool]').forEach((r) => r.addEventListener('change', () => { panel.tool = r.value; }));
-$('clearRects').onclick = () => panel.clear('rects');
-$('clearCurve').onclick = () => panel.clear('curve');
+document.querySelectorAll('input[name=tool]').forEach((r) => r.addEventListener('change', () => panel.setTool(r.value)));
+$('deleteAll').onclick = () => {
+  if (panel.items.length > 1 && !confirm(`Delete all ${panel.items.length} selections?`)) return;
+  panel.clearAll();
+};
+addEventListener('keydown', (e) => {  // Delete / Backspace removes the selected item (not while typing)
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && panel.selectedId != null) {
+    e.preventDefault();
+    panel.deleteSelected();
+  }
+});
 
 // ---------- controls ----------
 for (const [v, label] of CHOICES) $('cmap').add(new Option(label, v));
-const ids = ['mode', 'field', 'cmap', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+const ids = ['field', 'cmap', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
 function applyControls() {
-  gl.uniform1i(U.uMode, +$('mode').value);
+  const tf = $('tf1d').checked;
+  gl.uniform1i(U.uTF1D, tf ? 1 : 0);
+  for (const id of ['field', 'cmap', 'winLo', 'winHi']) $(id).disabled = !tf;  // only used by the 1D transfer function
   gl.uniform1i(U.uField, +$('field').value);
   updateColormap();
   const lo = +$('winLo').value, hi = Math.max(+$('winHi').value, lo + 0.005);
@@ -278,11 +293,6 @@ function applyControls() {
   const c = [0, 1, 2, 3, 4, 5].map((i) => +$('c' + i).value);
   gl.uniform3f(U.uClipMin, Math.min(c[0], c[1]), Math.min(c[2], c[3]), Math.min(c[4], c[5]));
   gl.uniform3f(U.uClipMax, Math.max(c[0], c[1]), Math.max(c[2], c[3]), Math.max(c[4], c[5]));
-  gl.uniform1i(U.uFiber, $('fiber').checked ? 1 : 0);
-  panel.showCurve = $('fiber').checked;
-  gl.uniform1i(U.uRegions, $('regions').checked ? 1 : 0);
-  gl.uniform1i(U.uFill, $('fill').checked ? 1 : 0);
-  panel.showRects = $('regions').checked;
   panel.cmapChoice = $('cmap').value;
   panel.draw();
   const k = +$('sliceDepth').value;
@@ -291,19 +301,14 @@ function applyControls() {
   const fi = +$('field').value, [r0, r1] = meta.ranges[meta.fields[fi]];
   const real = (u) => (r0 + u * (r1 - r0)).toFixed(fi === 2 ? 0 : 1);
   $('winLabel').textContent = `${meta.names[fi]} window: ${real(lo)} to ${real(hi)} ${meta.units[fi]}`;
-  $('cbar').hidden = +$('mode').value !== 0;  // the colour bar belongs to the 1D transfer function
+  $('cbar').hidden = !tf;  // the colour bar belongs to the 1D transfer function
+  $('winLabel').hidden = !tf;
   if (!$('cbar').hidden) drawColorbar($('cbar'), { map: cmapName, lo: r0 + lo * (r1 - r0), hi: r0 + hi * (r1 - r0), label: meta.names[fi], unit: meta.units[fi] });
   interact();
 }
-const checks = ['fiber', 'regions', 'fill', 'slice'];
+const checks = ['tf1d', 'slice'];
 [...ids, ...checks].forEach((id) => $(id).addEventListener('input', applyControls));
 $('slice').addEventListener('change', () => { if ($('slice').checked) cam.el = Math.max(cam.el, 1.2); });  // look down on the map
-// drawing a curve or rectangle while it is hidden turns it back on
-$('ts').addEventListener('pointerdown', () => {
-  const box = $(panel.tool === 'curve' ? 'fiber' : 'regions');
-  if (!box.checked) { box.checked = true; applyControls(); }
-});
-
 // ---------- dataset / time step ----------
 const dsSel = $('dataset'), stepEl = $('step');
 for (const [name, d] of Object.entries(meta.datasets)) dsSel.add(new Option(d.label, name));
@@ -420,7 +425,11 @@ $('file').onchange = async (e) => {
   if (!f) return;
   try {
     const s = JSON.parse(await f.text());
-    for (const [id, v] of Object.entries(s.controls)) checks.includes(id) ? ($(id).checked = v) : ($(id).value = v);
+    for (const [id, v] of Object.entries(s.controls)) {
+      if (!$(id) || id === 'mode') continue;  // controls that no longer exist
+      checks.includes(id) ? ($(id).checked = v) : ($(id).value = v);
+    }
+    if (s.controls.mode !== undefined && s.controls.tf1d === undefined) $('tf1d').checked = s.controls.mode === '0';  // old 'Mode' select
     Object.assign(cam, structuredClone(HOME), s.camera);
     const want = s.data;
     if (want && meta.datasets[want.dataset]) {
