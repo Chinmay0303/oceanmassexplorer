@@ -49,6 +49,7 @@ If the data is missing, the app falls back to the old annual temperature/salinit
   (Delete all removes everything). The 3D view shows all ticked selections of every diagram together.
 - **Volume**: tick "Colour the ocean by one field" to colour by temperature, salinity or oxygen with its oceanographic colour map
   (thermal, haline, oxy; Viridis or Cividis can be chosen instead); a colour bar shows the values.
+- **Quality** (Volume section): Fast / Normal / High sets the number of ray-march steps; High gives the most exact surfaces.
 - **Picking**: click the ocean in the 3D view to read temperature, salinity, oxygen, position and the selections containing the point;
   the point is marked in the diagram and pinned in 3D (Esc or a click on empty space clears it).
 - Camera: drag to rotate, right/Shift-drag to pan, scroll to zoom, double-click to reset.

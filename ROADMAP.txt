@@ -2,6 +2,7 @@ OCEAN WATER MASS EXPLORER - IMPROVEMENT ROADMAP (feasibility, priority, affected
 =================================================================================
 STATUS (2026-11-25): item F (time animation) is built for annual + monthly (no seasonal); item D (more fields) is built for T, S, O2
 with the three diagrams T-S, T-O2, S-O2 (1D transfer function on all three fields); selections are per diagram, no cross-pair combination yet.
+Update: 2.1 (fiber quality) was measured and refined (log.md D31): the old test was already accurate; picking (2.4) and several selections/legends are built (D24-D29).
 Still open: everything else below (fiber quality, colour map/legend, delete single selections, multiple curves, picking, performance, hygiene).
 Details and decisions: log.md (D16-D21).
 

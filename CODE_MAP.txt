@@ -329,3 +329,13 @@ PART 17. PICKING (step 6)
  17.5 ts.js probe / setProbe()                         ring + cross drawn in the active diagram at the picked point.
  17.6 data.js dlon                                     grid step in longitude, needed for the lat/lon readout.
  Interaction map addition: click in 3D -> 17.3 -> 17.2 (L4) -> shader pass (L5) -> 17.4 -> diagram marker (L2/L3).
+
+=================================================================================
+PART 18. FIBER REFINEMENT AND QUALITY (step 7)
+=================================================================================
+ 18.1 shaders.js selDistE()/selDist()      signed distance of a selection at a sample (+ endpoint flag for curves).
+ 18.2 shaders.js refineHit()               7-step bisection along the ray segment between two samples with different signs; rejects land and, for curves,
+                                           roots with |distance| >= 0.01 or at an endpoint.
+ 18.3 shaders.js march loop                curve hits (pre-filter |f| < 0.3) and rectangle hits (no gate) go through refineHit() before shading.
+ 18.4 shaders.js uSteps / MAXSTEPS         ray-march step count from the Quality select; index.html #quality, main.js applyControls (saved in `ids`).
+ Replaces the linear-interpolated hits of 6.10/6.11 (see 16.4 for the surrounding loop).
