@@ -26,6 +26,11 @@ Date of the first entries: 2026-11-25.
 | D8 | New data goes to `public/data/woa23/` (own `meta.json`); old `public/data/*` untouched | The app still reads the old files; overwriting would break it until the frontend is migrated. |
 | D9 | "Monthly" is a **climatology** (mean of each month over 1971–2000), not a time series | Animation shows a typical seasonal cycle. Say "monthly climatology" in the UI. |
 | D10 | Data **hosted on Google Drive** (link shared with the team), **not in git**. `public/data/woa23/**/*.bin` is git-ignored; only `meta.json` is committed | Monthly+annual binaries are 341 MB (163 MB as .tar.gz); committing them would bloat the repo permanently. |
+| D11 | Volume texture channels: **r = T, g = S, b = O₂, a = ocean mask** (was r=T, g=S, b=mask). Shader field index `uField` 0/1/2 indexes the channels | Oxygen fits the free 4th channel at no extra GPU memory. Any code reading the mask must use `.a` now. |
+| D12 | Box height = `depthScale × nz / 102` | Annual and monthly share the same standard levels, so every level has the same height in both modes (monthly looks like the top 57/102 of the annual box). |
+| D13 | Data location, first match wins: `?data=<base url>` → `VITE_DATA_URL` → `data/woa23/` → legacy `data/` (old annual T/S) | The app keeps working before the new data is downloaded; hosting can change without code changes. A Drive link cannot be used directly (see README). |
+| D14 | Months load lazily, one step at a time, and stay cached in memory | 22 MB per month. Playback will need all 12 cached or streamed (not built yet). |
+| D15 | Old saved configs (`ocean-config.json`) are **not compatible** with the new data | T/S/O normalisation ranges changed (T −3…31 → −3…36, S 5…41 → 4…44), so saved rectangles/curves shift. Re-draw them. |
 
 ## Findings about the existing code (first review)
 
@@ -61,6 +66,8 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 
 - **2026-11-25** NCEI allowed by user; real download + prep run succeeded (details in *Data run status*). User chose Google Drive for hosting (D10).
 - **2026-11-25** User will run download + prep locally and upload to Google Drive; step-by-step instructions added to `README.md` (*Getting the data*). Drive links can't be fetched by the browser app (no CORS, large-file confirm page), so teammates unzip into `public/data/`; the app also accepts `?data=<url>`.
+- **2026-11-25** Dataset selector built and tested in headless Chromium (SwiftShader) against the real `woa23` data: Annual → Monthly → Jul → 1D mode with dissolved oxygen all load and render; window readout shows real units; no JS errors (only software-renderer GPU warnings). Commits: loader (`src/data.js`), T-S panel `setData`, step-label fix, selector + shader/`main.js`/`index.html`.
+- **2026-11-25** Bug found while testing: `meta.json` has `step_labels` (snake_case); loader now exposes it as `stepLabels`.
 
 ## Data run status
 
@@ -84,4 +91,7 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - Upload the `woa23` data to Google Drive and put the shared link in README + here (the cloud session cannot upload to Drive; use the tar.gz or run prep locally). The app will need a configurable data base URL (Drive links do not allow direct CORS fetches, so we may need a direct-download host, e.g. GitHub release assets, for the deployed app; Drive is fine for the team to fetch files into `public/data/woa23` by hand).
 - Should the global ranges be clipped (e.g. to 99.99th percentile) to use the T-S/T-O axes better? Coastal extremes (T 36, S 44, O₂ 722) stretch them; the 256-bin histogram resolution is ~0.15 °C in T.
 - Oxygen units µmol/kg confirmed; put them on the axis label.
-- Frontend migration to the new data layout (dataset selector, time slider, play/pause) — not started.
+- Frontend: dataset selector + month slider + oxygen field are DONE. Still to do: play/pause + speed + loop, blending between months,
+  preloading all 12 months, histogram brightness fixed across months, T-S panel axis selector for T–O₂ / S–O₂ (panel is still T–S only),
+  legend/colour bar for oxygen. The month slider loads on release (`change`), not while dragging.
+- UI text still says "Each rectangle is a closed control polygon…" (stale hint) — fix with the selection-editing work.

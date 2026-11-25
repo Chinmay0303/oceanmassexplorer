@@ -237,3 +237,21 @@ ts.js - TSPanel fields (rects, curve, tool, drag, show*, theme, hist). No other 
 Known smells seen while auditing (details in ROADMAP.txt): U Proxy re-queries uniform locations; DOM used as
 control-state store; ts.js imports limits from shaders.js; dead stale hint text ("control polygon") in index.html;
 panel.drag/curve share one field for two tools.
+
+=================================================================================
+PART 12. CHANGES AFTER THE FIRST MAP (dataset selector)  -- line numbers in Parts 2-8 above are now shifted
+=================================================================================
+ 12.1 src/data.js (NEW)       openData(): finds meta (?data= / VITE_DATA_URL / data/woa23/ / legacy data/), returns
+                              { meta, base, loadStep(dataset, step) }; checks byte sizes; caches steps. Replaces old 3.1.
+ 12.2 index.html "Data" group Dataset select, Month slider (shown only for monthly), data info line. Field select has Oxygen.
+                              Window slider has a real-unit readout (#winLabel).                                   [P2]
+ 12.3 main.js data block      top of file: loads first step, `cur` = current dataset/step/nz, panelMeta().          (was 3.1)
+ 12.4 main.js uploadVolume()  replaces 3.5: texture = (T, S, O2, mask), recreated if nz changes, per-level upload.
+ 12.5 main.js "dataset / time step" block  (before save/load): dataset + month UI, showStep() with a load token so the
+                              last request wins; month loads on slider release.
+ 12.6 main.js applyControls() uD scaled by nz/102, slice depth from dataset depth axis, window readout.        (7.4)
+ 12.7 main.js save/load       saves { data: { dataset, step } }; load re-selects it before applying controls.  (7.7/7.8)
+ 12.8 shaders.js              uVol = (T,S,O2,mask in .a); 1D mode samples channel uField (0 T,1 S,2 O2).        (6.3,6.4,6.6,6.7)
+ 12.9 ts.js setData()         swap histogram for another step; ranges from meta.ranges; mask & 1.               (5.x)
+ Interaction map (Part 10) additions: Dataset select / Month slider -> main.js 12.5 -> cur + showStep -> uploadVolume (L4)
+ + panel.setData (L3) -> same shader path. Nothing else in the interaction chain changed.
