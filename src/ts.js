@@ -31,6 +31,14 @@ export class TSPanel {
     new ResizeObserver(() => this.resize()).observe(canvas);
   }
 
+  // swap in another time step / dataset: meta = { nx, ny, nz, depth, lat0, dlat, ranges: { t, s } }
+  setData(meta, tsData) {
+    this.meta = meta;
+    this.hist = this.buildHist(tsData);
+    this.histImg = this.renderHist();
+    this.draw();
+  }
+
   // re-colour for a theme change
   refreshTheme() {
     this.theme = themeColors();
@@ -47,7 +55,7 @@ export class TSPanel {
       for (let j = 0; j < ny; j++) {
         const w = Math.cos(((lat0 + j * dlat) * Math.PI) / 180) * dz[k];
         for (let x = 0; x < nx; x++, i++) {
-          if (!mask[i]) continue;
+          if (!(mask[i] & 1)) continue;  // bit0 = ocean
           h[Math.min(BINS - 1, (t[i] >> 8)) * BINS + Math.min(BINS - 1, s[i] >> 8)] += w;
         }
       }
@@ -161,7 +169,7 @@ export class TSPanel {
     ctx.fillStyle = rgb(textLight); ctx.strokeStyle = rgb(border); ctx.lineWidth = 1;
     ctx.font = `11px ${getComputedStyle(this.cv).fontFamily}`;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-    const [tl, th] = this.meta.t_range, [sl, sh] = this.meta.s_range;
+    const [tl, th] = this.meta.ranges?.t ?? this.meta.t_range, [sl, sh] = this.meta.ranges?.s ?? this.meta.s_range;
     ctx.textAlign = 'center';
     for (let i = 0; i <= 4; i++) {
       const f = i / 4, [px] = this.toPx(f, 0);
