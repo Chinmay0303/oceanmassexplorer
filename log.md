@@ -31,6 +31,12 @@ Date of the first entries: 2026-11-25.
 | D13 | Data location, first match wins: `?data=<base url>` → `VITE_DATA_URL` → `data/woa23/` → legacy `data/` (old annual T/S) | The app keeps working before the new data is downloaded; hosting can change without code changes. A Drive link cannot be used directly (see README). |
 | D14 | Months load lazily, one step at a time, and stay cached in memory | 22 MB per month. Playback will need all 12 cached or streamed (not built yet). |
 | D15 | Old saved configs (`ocean-config.json`) are **not compatible** with the new data | T/S/O normalisation ranges changed (T −3…31 → −3…36, S 5…41 → 4…44), so saved rectangles/curves shift. Re-draw them. |
+| D16 | **All 12 months are preloaded onto the GPU** (one RGBA16F 3D texture per month, 12 × ~30 MB ≈ 354 MB GPU). CPU copies of multi-step datasets are dropped after upload; annual (single step, ~40 MB) stays cached | Month switching and playback need no uploads. Cost: ~0.4 GB GPU memory in monthly mode (could fail on very small GPUs; no fallback yet). Month slider and Play are disabled until all 12 are loaded. |
+| D17 | Playback blends two adjacent months **in the shader** (`uVolB`, `uBlend`), not with a render-to-texture pass | Simpler and needs no `EXT_color_buffer_float`. Volume fetches double only while blending (one fetch otherwise). This replaces the plan in ROADMAP item F. |
+| D18 | Playback options: 0.5 / 1 / 2 / 4 months per second, loop Dec→Jan, blend on/off, Space toggles. Rendering drops to half resolution while playing and returns to full on pause | Reuses the existing "interacting" low-res mode; adaptive quality is still roadmap item E. |
+| D19 | Per-step histograms (all pairs) are computed in the browser at load; brightness is normalised by the maximum over all loaded steps | Brightness stays comparable between months. The max grows while months are still loading, so the final look settles after the last month. |
+| D20 | **Diagram pairs**: T–S (x = S, y = T), T–O₂ (x = O₂, y = T), S–O₂ (x = O₂, y = S). Selections (rectangles, curve) belong to **one pair**; the 3D view shows the active pair's selections only | Clear semantics, no ambiguity about what a rectangle means. Combining selections from different pairs (intersection/union) is not built (future work). |
+| D21 | Save format now has `pair`, `selections {ts,to,so}` and `data {dataset, step}`. Old configs with only `rects`/`curve` load as T–S | Backward-readable, although old values are shifted by the new ranges (D15). |
 
 ## Findings about the existing code (first review)
 
@@ -68,6 +74,9 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - **2026-11-25** User will run download + prep locally and upload to Google Drive; step-by-step instructions added to `README.md` (*Getting the data*). Drive links can't be fetched by the browser app (no CORS, large-file confirm page), so teammates unzip into `public/data/`; the app also accepts `?data=<url>`.
 - **2026-11-25** Dataset selector built and tested in headless Chromium (SwiftShader) against the real `woa23` data: Annual → Monthly → Jul → 1D mode with dissolved oxygen all load and render; window readout shows real units; no JS errors (only software-renderer GPU warnings). Commits: loader (`src/data.js`), T-S panel `setData`, step-label fix, selector + shader/`main.js`/`index.html`.
 - **2026-11-25** Bug found while testing: `meta.json` has `step_labels` (snake_case); loader now exposes it as `stepLabels`.
+- **2026-11-25** Added: per-step histograms + per-pair selections in the diagram panel (refactor), preload of all 12 months, play/pause with blending, diagram selector (T–S, T–O₂, S–O₂). Each step tested in headless Chromium (SwiftShader) on the real data:
+  preload state (Play/slider disabled while loading, enabled after), playback (Feb→May seen at 4 months/s, Space pauses, label stable), switching back to Annual hides the controls, T–O₂ rectangle (low-oxygen box) + curve render fiber surfaces, S–O₂ starts empty, T–S default selection returns, save → reload → load restores dataset, month and pair; no JS errors.
+- **2026-11-25** Side effects: diagram axes now use nice tick values (0, 10, 20, … instead of rounded fractions); the stale "control polygon" hint was rewritten.
 
 ## Data run status
 
@@ -91,7 +100,8 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - Upload the `woa23` data to Google Drive and put the shared link in README + here (the cloud session cannot upload to Drive; use the tar.gz or run prep locally). The app will need a configurable data base URL (Drive links do not allow direct CORS fetches, so we may need a direct-download host, e.g. GitHub release assets, for the deployed app; Drive is fine for the team to fetch files into `public/data/woa23` by hand).
 - Should the global ranges be clipped (e.g. to 99.99th percentile) to use the T-S/T-O axes better? Coastal extremes (T 36, S 44, O₂ 722) stretch them; the 256-bin histogram resolution is ~0.15 °C in T.
 - Oxygen units µmol/kg confirmed; put them on the axis label.
-- Frontend: dataset selector + month slider + oxygen field are DONE. Still to do: play/pause + speed + loop, blending between months,
-  preloading all 12 months, histogram brightness fixed across months, T-S panel axis selector for T–O₂ / S–O₂ (panel is still T–S only),
-  legend/colour bar for oxygen. The month slider loads on release (`change`), not while dragging.
-- UI text still says "Each rectangle is a closed control polygon…" (stale hint) — fix with the selection-editing work.
+- Frontend status: dataset selector, month slider, oxygen field, preload, play/pause with blending, diagram selector (T–S / T–O₂ / S–O₂) are DONE.
+  Not done: selections combined across pairs, legend/colour bar (oxygen especially), real-time performance numbers on a real GPU
+  (all tests so far ran on a software renderer), GPU-memory fallback for monthly mode (~0.4 GB), seasonal dataset (D3).
+- Not yet checked on a real GPU: smoothness of playback at 320 march steps with blending (two fetches per sample). If it stutters, lower the
+  playback resolution factor or add the adaptive step / empty-space skipping from ROADMAP item E.
