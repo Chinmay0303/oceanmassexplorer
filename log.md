@@ -60,6 +60,7 @@ compute each month's histogram in the browser at load (~30 ms); scale box height
 - **2026-11-25** Decisions D1–D9 made. Wrote `tools/download.py` and rewrote `tools/prep.py` (annual + monthly, t/s/o). Updated `.gitignore` (`data/raw`), README, CODE_MAP Part 1.
 
 - **2026-11-25** NCEI allowed by user; real download + prep run succeeded (details in *Data run status*). User chose Google Drive for hosting (D10).
+- **2026-11-25** User will run download + prep locally and upload to Google Drive; step-by-step instructions added to `README.md` (*Getting the data*). Drive links can't be fetched by the browser app (no CORS, large-file confirm page), so teammates unzip into `public/data/`; the app also accepts `?data=<url>`.
 
 ## Data run status
 
