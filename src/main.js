@@ -5,6 +5,7 @@ import { TSPanel, buildHists, PAIRS } from './ts.js';
 import { themeColors, CURVE_RGB } from './theme.js';
 
 import { openData } from './data.js';
+import { colormapTable, mapName, CHOICES } from './colormaps.js';
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
@@ -95,15 +96,18 @@ function addStep(k, d) {
 resetVolumes();
 addStep(0, first);
 
-// 1D colour map (viridis-like stops)
-const STOPS = [[68, 1, 84], [65, 68, 135], [42, 120, 142], [34, 168, 132], [122, 209, 81], [253, 231, 37]];
-const cmap = new Uint8Array(256 * 4);
-for (let i = 0; i < 256; i++) {
-  const f = (i / 255) * (STOPS.length - 1), k = Math.min(Math.floor(f), STOPS.length - 2), u = f - k;
-  for (let c = 0; c < 3; c++) cmap[i * 4 + c] = STOPS[k][c] * (1 - u) + STOPS[k + 1][c] * u;
-  cmap[i * 4 + 3] = 255;
+// 1D colour map (256 x 1): each field has its own default map (temperature thermal, salinity haline, oxygen oxy);
+// the table is re-uploaded when the field or the colour-map choice changes
+const cmapTex = tex(gl.TEXTURE_2D, 2, () => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colormapTable('thermal')));
+let cmapName = 'thermal';
+function updateColormap() {
+  const name = mapName(+$('field').value, $('cmap').value);
+  if (name === cmapName) return;
+  cmapName = name;
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, cmapTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, colormapTable(name));
 }
-tex(gl.TEXTURE_2D, 2, () => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, cmap));
 
 const tf2 = tex(gl.TEXTURE_2D, 3, () => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 256, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(256 * 256 * 4)));
 
@@ -258,10 +262,12 @@ $('clearRects').onclick = () => panel.clear('rects');
 $('clearCurve').onclick = () => panel.clear('curve');
 
 // ---------- controls ----------
-const ids = ['mode', 'field', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+for (const [v, label] of CHOICES) $('cmap').add(new Option(label, v));
+const ids = ['mode', 'field', 'cmap', 'winLo', 'winHi', 'opacity', 'context', 'depthScale', 'sliceDepth', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
 function applyControls() {
   gl.uniform1i(U.uMode, +$('mode').value);
   gl.uniform1i(U.uField, +$('field').value);
+  updateColormap();
   const lo = +$('winLo').value, hi = Math.max(+$('winHi').value, lo + 0.005);
   gl.uniform2f(U.uWin, lo, hi);
   gl.uniform1f(U.uOpacity, +$('opacity').value);
