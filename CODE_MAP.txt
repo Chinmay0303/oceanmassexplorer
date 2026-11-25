@@ -1,0 +1,234 @@
+OCEAN WATER MASS EXPLORER - CODE MAP (state of repo: single commit "first commit")
+=================================================================================
+Legend: [P#] = proposal feature number (1-8), [N1] = novelty (fibers + regions in one renderer).
+Status:  DONE / PARTIAL / MISSING.  Line numbers are approximate.
+
+Stack: vanilla JS (ES modules) + WebGL2 + Canvas2D, Vite 7 build, Simple.css. No framework, no tests.
+Rendering = one full-screen triangle + a single fragment shader that ray-marches a 3D texture.
+
+---------------------------------------------------------------------------------
+PART 1. DATA PIPELINE (offline)
+---------------------------------------------------------------------------------
+File: tools/prep.py  (62 lines)
+ 1.1 load()            L22-25   Reads t_an / s_an from WOA23 NetCDF, masked -> NaN.        [Dataset]
+ 1.2 fill_nearest()    L28-30   Fills land/below-seafloor with nearest ocean value
+                                (distance transform) so GPU filtering doesn't bleed junk.
+ 1.3 quantise()        L33-34   Scales to uint16 over [lo,hi].
+ 1.4 main()            L37-60   Computes T/S ranges (floor/ceil), writes t.bin, s.bin
+                                (uint16), mask.bin (uint8), meta.json. Layout [depth][lat][lon].
+ Output: public/data/{t.bin 13MB, s.bin 13MB, mask.bin 6.6MB, meta.json}
+   meta: 360x180x102 grid (1 deg, 102 depth levels 0-5500 m), lat0=-89.5, lon0=-179.5,
+         T range [-3,31] C, S range [5,41] PSU.
+ Proposal map: [Dataset] WOA23 temperature + salinity on lat/lon/depth grid. DONE (annual 1-deg only).
+ Note: no other WOA fields (oxygen, nutrients, ...), no seasonal/monthly, no 0.25-deg.
+
+---------------------------------------------------------------------------------
+PART 2. APP SHELL / UI MARKUP
+---------------------------------------------------------------------------------
+File: index.html (67 lines)
+ 2.1 Viewport          L10-13   #gl canvas + #status help line.                              [P1]
+ 2.2 T-S panel block   L18-28   #ts canvas, Rectangle/Curve radio, clear buttons, hint.      [P3,P4,P5]
+ 2.3 "Volume" group    L30-45   Mode (1D TF / T-S regions), field (T/S), window min/max,
+                                opacity, ocean-context, depth scale, show-rect/fill/fiber
+                                checkboxes.                                                  [P2,P4,P5,P6]
+ 2.4 "Slice" group     L47-51   Slice mode toggle + depth slider.                            [extra]
+ 2.5 "Clip" group      L53-60   6 sliders: lon/lat/depth min+max.                            [P7]
+ 2.6 "View and config" L62-65   Reset view, Save, Load (hidden file input).                  [P8]
+
+File: src/style.css (68 lines)
+ 2.7 Palette + dark mode     L1-14   Blue palette vars on top of Simple.css.
+ 2.8 App layout              L16-35  Full-height viewer + 25rem side panel, mobile stack at <720px.
+ 2.9 Form/field styles       L37-52  .field grid, range, .check, .row.
+ 2.10 Select chevron fix     L54-67  SVG arrow replaces Simple.css gradient arrow.
+File: src/simple.css (780 lines) - vendored Simple.css, unmodified (third-party, ignore).
+File: src/theme.js (23 lines)
+ 2.11 cssColor()/themeColors()  Reads CSS variables -> RGB so canvases follow light/dark theme.
+ 2.12 CURVE_RGB                 Fixed green for curve/fiber.
+Files: vite.config.js (relative base so build can be hosted anywhere), package.json (vite only), .gitignore.
+
+---------------------------------------------------------------------------------
+PART 3. GPU SETUP & DATA UPLOAD  (src/main.js)
+---------------------------------------------------------------------------------
+ 3.1 Data loading         L10-18   fetchBin() + meta.json + t/s/mask bins in parallel (top-level await). No error handling.
+ 3.2 WebGL2 init          L21-23   Gets context; shows message if unsupported.
+ 3.3 Shader program       L25-39   compile/link helper, `U` Proxy for uniform lookup (calls getUniformLocation every access).
+ 3.4 tex() helper         L41-52   Creates texture, linear filter, clamp-to-edge.
+ 3.5 Volume texture       L54-65   3D RGBA16F = (T, S, ocean mask) per voxel, uploaded slice-by-slice
+                                   from Float32 (low peak memory, ~52 MB on GPU).             [P1, Dataset]
+ 3.6 1D colour map        L67-75   viridis-like 256x1 texture (used only by 1D TF mode).      [P2]
+ 3.7 T-S region TF tex    L77-82   256x256 RGBA8, NEAREST filter = sharp rectangle edges.      [P4]
+ 3.8 Curve SDF            L84-105  CPU brute-force signed distance of T-S polyline into 512x512 RG16F
+                                   texture (r = signed dist, g = nearest-is-endpoint flag).
+                                   Recomputed only when curve changes (cache key = JSON).      [P5, N1]
+ 3.9 Static uniforms      L107-109 Sampler units, fiber colour, band width (0.01).
+
+---------------------------------------------------------------------------------
+PART 4. CAMERA & INTERACTION  (src/main.js L111-192)
+---------------------------------------------------------------------------------
+ 4.1 Orbit camera model   L111-135  az/el/dist/target, HOME pose, basis(), pan(), target clamping.   [P1]
+ 4.2 Mouse                L137-157  Left drag orbit, right/middle/Shift drag pan (pointer capture), dblclick reset.
+ 4.3 Zoom to cursor       L159-175  Wheel zoom keeps point under cursor fixed; normalises deltaMode.
+ 4.4 Keyboard             L177-192  WASD/arrows move, R/F up/down, Q/E zoom; speed scales with distance.
+ 4.5 Low-res while moving L118-121, L294-298  interact() -> render at 0.5 scale for 200 ms; dirty-flag rendering.
+ 4.6 Input hygiene        L138, L140, L178-180  context menu suppressed, focus blurred on canvas press,
+                                   keys ignored while typing in INPUT/SELECT, key set cleared on window blur.
+ Status: rotate / zoom / pan DONE. [P1]
+
+---------------------------------------------------------------------------------
+PART 5. T-S DIAGRAM PANEL  (src/ts.js, 206 lines)
+---------------------------------------------------------------------------------
+ 5.1 Constants            L4-8     256 bins, 8 rectangle colours (non-blue), plot margins.
+ 5.2 Histogram build      L41-55   2D T-S histogram, weighted by cos(lat) * layer thickness
+                                   (i.e. approx. real water volume), ocean cells only.         [P3]
+ 5.3 Histogram render     L57-81   log scale colour ramp, theme-aware (light/dark), t flipped to point up.
+ 5.4 Layout/coords        L83-100  resize w/ DPR (ResizeObserver, L31), toPx(), fromEvent() -> normalised (s,t) in [0,1].
+ 5.5 Rectangle tool       L102-137 Drag to make rectangle (min size 0.01, max 8), colours cycle.   [P4]
+ 5.6 Curve tool           L102-137 Freehand polyline, point spacing >0.02, max 64 points,
+                                   <2 points discarded.                                        [P5]
+ 5.7 clear()/setSelection L139-150 Clear rects/curve; set from loaded config. Fires onChange.
+ 5.8 draw()               L152-193 Histogram image, axes + ticks + labels (Salinity PSU / Temperature C),
+                                   rectangles (fill+outline), curve. Respects show toggles.
+ 5.9 regionTF()           L196-205 Rasterises rectangles into 256x256 RGBA texture (later rect overwrites earlier).  [P4]
+ Gaps: no editing of existing rectangles/curve (move, resize, delete one), no hover readout of
+ (T,S)->count, no water-mass presets (e.g. NADW, AAIW), no linking brush from 3D back to T-S.
+
+---------------------------------------------------------------------------------
+PART 6. SHADER: RAY-CASTING RENDERER  (src/shaders.js, 248 lines)
+---------------------------------------------------------------------------------
+ 6.1 Vertex shader        L1-7     Full-screen triangle from gl_VertexID.
+ 6.2 Limits/world box     L9-12    MAX_CURVE=64, MAX_RECTS=8; box x=lon[-1,1], z=lat[-.5,.5], y=depth[-d,d].
+ 6.3 Uniforms             L20-43   Volume, TF1, TF2, SDF samplers; camera; mode/field/window; clip; rect arrays; theme colours.
+ 6.4 Helpers              L50-111  toTex (world->tex), inClip, sampleST (land test), curveDist (SDF lookup),
+                                   sdBox (signed distance to rectangle), fiberAt, occupancy, withGrid (30-deg graticule),
+                                   fiberShade (two-sided Fresnel-ish), fiberNormal (central-difference gradient of SDF).
+ 6.5 Ray setup            L113-118, L158-173  Camera ray, box intersection, 320 fixed steps, per-pixel jitter.
+ 6.6 Slice mode           L120-156 Single-plane lookup: ocean colour / 1D TF / filled rects, rectangle and
+                                   curve outlines, land colour, grid.                           [extra]
+ 6.7 1D transfer function L183-190 Window [lo,hi] on T or S -> colour map, constant opacity.     [P2]
+ 6.8 T-S region (MDTF)    L187-190 Per-voxel lookup (S,T) -> colour of rectangle (fill option).  [P4]
+ 6.9 Volume compositing   L191-193 Front-to-back, opacity correction exp(-a*dt*60).
+ 6.10 Curve fiber surface L195-206 Detect sign change of curve SDF between consecutive samples, interpolate
+                                   hit point, shade with SDF-gradient normal, composite.       [P5, N1]
+ 6.11 Rectangle fibers    L207-218 Same sign-change test with sdBox for each rectangle (boundary surface of region).  [P4, P6, N1]
+ 6.12 Early termination   L223     acc.a > 0.98 break.
+ 6.13 Ocean context body  L227-241 First ocean hit -> lit solid (gradient of occupancy), depth-tinted, graticule on top faces.  [extra]
+ 6.14 Box edges           L243-247 Faint bounding-box edges; final composite.
+ Status: P1 DONE, P2 PARTIAL (see gaps), P4 DONE, P5 DONE, P6 DONE.
+
+---------------------------------------------------------------------------------
+PART 7. CONTROLS, STATE, SAVE/LOAD  (src/main.js L194-286)
+---------------------------------------------------------------------------------
+ 7.1 Panel wiring         L194-195 Creates TSPanel with onChange -> uploadSelection + redraw.
+ 7.2 uploadSelection()    L197-219 Uploads rect TF texture, curve SDF (if changed), rect boxes/colours/count.
+ 7.3 Tool buttons         L221-223 Radio rect/curve, clear buttons.
+ 7.4 applyControls()      L225-248 Reads all sliders/checkboxes -> uniforms (mode, field, window, opacity,
+                                   context, depth scale, clip min/max, toggles, slice depth label).
+ 7.5 Clip planes          L235-237 6 sliders -> axis-aligned min/max box in texture space.      [P7]
+ 7.6 Event binding        L249-257 input listeners; slice mode tilts camera top-down; drawing a hidden
+                                   selection re-enables its checkbox.
+ 7.7 Save                 L260-270 JSON download: controls, camera, rects, curve.                [P8]
+ 7.8 Load                 L271-286 Restores controls + camera + selection, alert on error. No schema/version check.  [P8]
+
+---------------------------------------------------------------------------------
+PART 8. RENDER LOOP, THEME, STARTUP  (src/main.js L288-328)
+---------------------------------------------------------------------------------
+ 8.1 render()             L288-308 rAF loop, key movement, resolution scaling, canvas resize, camera uniforms, draw.
+ 8.2 Vector helpers       L309-310 cross, norm.
+ 8.3 Theme                L312-321 prefers-color-scheme listener -> bg/land/edge uniforms + T-S panel recolour.
+ 8.4 Initial state        L324-328 Default red rectangle (warm/salty) + thermocline-like curve, status help text.
+
+---------------------------------------------------------------------------------
+PART 9. DOCS / PROJECT HYGIENE
+---------------------------------------------------------------------------------
+ 9.1 README.md            Run/build/regenerate-data instructions. Stale ref: style.css mentions docs/styles.md (does not exist).
+ 9.2 Missing              Tests, lint/format, CI, deploy config, data citation/licence (WOA23), screenshots,
+                          report/user guide, per-person task split visible in git (1 commit only).
+
+---------------------------------------------------------------------------------
+PROPOSAL COVERAGE SUMMARY
+---------------------------------------------------------------------------------
+ P1 3D volume: rotate/zoom/crop ........ DONE   (Part 4, 6, 7.5)
+ P2 1D transfer function T or S ........ PARTIAL (window slider + fixed colour map, constant opacity; no editable curve/opacity)
+ P3 T-S 2D histogram panel ............. DONE   (5.2, 5.3, 5.8)
+ P4 Rectangle select -> MDTF volume .... DONE   (5.5, 5.9, 6.8; fill is OFF by default, fibers of the box edge shown instead)
+ P5 Curve select -> fiber surface ...... DONE   (5.6, 3.8, 6.10)
+ P6 Region + curve together ............ DONE   (6.10 + 6.11 in one pass)
+ P7 Clip along x/y/z ................... DONE   (7.5; min/max sliders per axis)
+ P8 Save/load configuration ............ DONE   (7.7, 7.8)
+ N1 Fiber surfaces + regions together .. DONE   (core demo)
+ Extra beyond proposal: slice mode, ocean context body, graticule, low-res-while-moving, theme support.
+
+---------------------------------------------------------------------------------
+SUGGESTED IMPROVEMENTS (priority order)
+---------------------------------------------------------------------------------
+ A. Fiber-surface quality (6.10/6.11): sign-change test on fixed 320 steps can miss thin sheets
+    or leave holes (band limit uBand*8); refine with a bisection/secant step, adaptive step near
+    the surface, or finer SDF. Compare against the fiber-surface paper's method.
+ B. Real multidimensional TF (6.8): currently one flat colour per rectangle. Add per-rectangle
+    opacity, soft (feathered) edges, and optionally a gradient-magnitude/lit volume shading.
+ C. Complete P2: editable 1D TF (colour + opacity control points) with a legend / colour bar.
+ D. T-S panel editing (5.5-5.7): select/move/resize/delete a single rectangle, edit curve points,
+    hover readout of T, S and volume, undo/redo; named water-mass presets.
+ E. Linked views: click a point in the 3D view -> show its (T,S) on the diagram (brushing both ways).
+ F. Performance: empty-space skipping (min/max brick texture), cache uniform locations (3.3),
+    optional quality slider for STEPS; drop mask channel / use R8 where possible.
+ G. Data size & robustness: 33 MB uncompressed bins in git (store as 8-bit or gzip, or fetch from release);
+    error handling for fetch/WebGL failures; version field in saved configs; lon seam at +-180.
+ H. Geographic context: coastline/continent overlay, lat/lon/depth labels and axes, non-linear
+    depth option (true metres vs level index).
+ I. Code structure: split main.js into camera.js / gl.js / controls.js / config.js; add unit tests for
+    prep.py ranges and config round-trip; remove stale doc references; add README screenshots + WOA23 citation.
+ J. Evaluation material for the course: a few documented case studies (e.g. Mediterranean outflow,
+    Antarctic Bottom Water) with saved configs, plus frame-time measurements.
+
+=================================================================================
+PART 10. USER INTERACTION MAP - ABSTRACTION LEVELS (high -> low)
+=================================================================================
+Levels
+ L0  User intent        "show me the Mediterranean outflow", "look inside", "save my view"
+ L1  UI widget          DOM element in index.html (sliders, checkboxes, T-S canvas, GL canvas, buttons)   [2.x]
+ L2  Event handler      listener that turns a DOM event into an action (main.js 4.x/7.x, ts.js 5.5-5.7)
+ L3  App state          cam{} (4.1), panel.rects / panel.curve (5.x), slider values (the DOM itself is the
+                        state store for controls), flags dirty / lastInteract / sdfKey
+ L4  GPU upload         uniforms + textures: applyControls (7.4), uploadSelection (7.2), curveSDF (3.8), render (8.1)
+ L5  Shader math        ray march, fiber sign-change test, SDF lookups (Part 6)
+ L6  Data               t/s/mask bins -> volume texture (Parts 1, 3.5)
+Flow is always L0->L6 on input and L5->screen on output; nothing talks back from the GL view to the T-S
+panel (no picking yet), so every interaction is a one-way chain.
+
+Interaction table (user action -> L1 widget -> L2 handler -> L3 state -> L4 upload -> L5 shader)
+ Rotate view         GL canvas drag      main.js pointermove 4.2      cam.az/el       render() 8.1 uEye/uFwd/..  march 6.5
+ Pan                 right/Shift drag    pointermove 4.2, pan()       cam.target      render() 8.1                march 6.5
+ Zoom to cursor      wheel               wheel 4.3, zoom()            cam.dist/target render() 8.1                march 6.5
+ Move by keys        WASD/arrows/R/F/Q/E keydown 4.4, moveByKeys()    cam.*           render() 8.1                march 6.5
+ Reset view          dblclick / Reset    4.2 / 7.7 reset              cam=HOME        render() 8.1                -
+ Draw rectangle      T-S canvas drag     ts.js down/move/up 5.5       panel.rects     uploadSelection 7.2 (regionTF 5.9, uRect*)   6.8, 6.11
+ Draw curve          T-S canvas drag     ts.js down/move/up 5.6       panel.curve     uploadSelection 7.2 (curveSDF 3.8, uSDF)     6.10
+ Clear rect/curve    2 buttons           main.js 7.3 -> panel.clear   rects/curve     uploadSelection 7.2         6.10/6.11
+ Switch tool         radio               main.js 7.3                  panel.tool      -                           -
+ 1D TF mode/field    selects + window    applyControls 7.4            DOM values      uMode/uField/uWin/uOpacity  6.7
+ Fill rectangles     checkbox            applyControls 7.4            DOM value       uFill, uRegions             6.8
+ Show fibers         2 checkboxes        applyControls 7.4 (+7.6 re-enable on draw)  uFiber, uRegions + panel.show*   6.10/6.11
+ Context/depth scale sliders             applyControls 7.4            DOM values      uContext, uD                6.13, toTex 6.4
+ Clip                6 sliders           applyControls 7.5            DOM values      uClipMin/uClipMax           inClip 6.4
+ Slice mode/depth    checkbox + slider   applyControls 7.4, 7.6       DOM values, cam.el  uSlice               6.6
+ Save / Load         buttons + file      7.7 / 7.8                    all of the above (JSON)  applyControls + setSelection   -
+ Theme change        OS setting          matchMedia 8.3               theme colours   uBg/uLand/uEdge, panel.refreshTheme  6.14
+Cross-cutting: every control change calls interact() -> half-resolution render for 200 ms (4.5).
+Expansion hooks (where new interaction should plug in): new widget -> index.html + `ids`/`checks` arrays
+(7.4/7.7: also makes it auto save/load); new T-S gesture -> ts.js down/move/up; new uniform -> shaders.js 6.3
++ applyControls 7.4; new 3D click action -> add pointer handler in 4.2 + ray-cast helper (does not exist yet).
+
+=================================================================================
+PART 11. COVERAGE AUDIT (is anything left out?)
+=================================================================================
+Checked every function, event listener and top-level block in main.js, ts.js, theme.js, shaders.js,
+prep.py, index.html and style.css against Parts 1-10. After this pass the map is complete for all
+first-party code. Items added in the audit: fetchBin (3.1), input hygiene (4.6), ResizeObserver (5.4).
+Not mapped on purpose: src/simple.css (vendored library), package-lock.json (generated), public/data/*.bin
+(generated outputs, described in Part 1).
+Global mutable state (for orientation): main.js - cam, drag, keys, dirty, lastInteract, lastScale, lastT, sdfKey;
+ts.js - TSPanel fields (rects, curve, tool, drag, show*, theme, hist). No other module state.
+Known smells seen while auditing (details in ROADMAP.txt): U Proxy re-queries uniform locations; DOM used as
+control-state store; ts.js imports limits from shaders.js; dead stale hint text ("control polygon") in index.html;
+panel.drag/curve share one field for two tools.
