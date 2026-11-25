@@ -18,6 +18,3 @@ export const themeColors = () => ({
   secondary: cssColor('var(--secondary)'),
   tertiary: cssColor('var(--tertiary)'),
 });
-
-// curve / fiber colour: a hue that stays visible on the blue ocean and on both themes
-export const CURVE_RGB = [124, 181, 24];

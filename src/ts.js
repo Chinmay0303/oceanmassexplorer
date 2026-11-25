@@ -1,4 +1,4 @@
-import { MAX_CURVE, MAX_CURVES, MAX_RECTS } from './shaders.js';
+import { MAX_CURVE, MAX_CURVES, MAX_RECTS, PAIR_CHANNELS } from './shaders.js';
 import { themeColors } from './theme.js';
 import { colorAt, mapName } from './colormaps.js';
 
@@ -11,13 +11,14 @@ const rgb = (c) => `rgb(${c})`;
 const M = { l: 50, r: 10, t: 10, b: 40 }; // plot margins in px
 const STRIP = 5;                          // width of the colour strips along the axes
 
-// Diagram pairs. x / y are field indices (0 = T, 1 = S, 2 = O2) = channels of the volume texture, so the shader
-// can look up the pair with uVol[x], uVol[y]. Selections (rectangles, curve) belong to one pair.
+// Diagrams. x / y are field indices (0 = T, 1 = S, 2 = O2) = channels of the volume texture (see PAIR_CHANNELS in
+// shaders.js); `index` is the diagram number the shader uses. Every selection belongs to one diagram.
 export const PAIRS = {
-  ts: { x: 1, y: 0, label: 'T–S' },
-  to: { x: 2, y: 0, label: 'T–O₂' },
-  so: { x: 2, y: 1, label: 'S–O₂' },
+  ts: { index: 0, x: PAIR_CHANNELS[0][0], y: PAIR_CHANNELS[0][1], label: 'T–S' },
+  to: { index: 1, x: PAIR_CHANNELS[1][0], y: PAIR_CHANNELS[1][1], label: 'T–O₂' },
+  so: { index: 2, x: PAIR_CHANNELS[2][0], y: PAIR_CHANNELS[2][1], label: 'S–O₂' },
 };
+export const PAIR_KEYS = Object.keys(PAIRS);
 
 // 2D volume-weighted histograms of one time step for every pair: BINS x BINS, row = y bin, column = x bin.
 // Voxel weight = cos(lat) * layer thickness (approximate water volume). d = { t, s, o|null, mask }.
@@ -80,13 +81,13 @@ export class TSPanel {
 
   // ---- selections: one flat list of items { id, kind: 'rect' | 'curve', pair, name, color, visible, style, ... } ----
   // rect: s0, s1 (x range) and t0, t1 (y range) in normalised coordinates; curve: points [[x, y], ...].
-  // The diagram shows the items of the active pair; `rects` / `curve` are what the 3D view draws at the moment.
+  // The diagram shows the items of the active pair; the 3D view draws the visible items of all diagrams.
   get pair() { return PAIRS[this.pairKey]; }
   get rects() { return this.items.filter((i) => i.kind === 'rect' && i.pair === this.pairKey); }
-  get surfaceRects() { return this.rects.filter((i) => i.visible && i.style !== 'volume'); }   // boundary surfaces in 3D
-  get volumeRects() { return this.rects.filter((i) => i.visible && i.style !== 'surface'); }   // translucent volumes in 3D
-  get curveItem() { return this.items.find((i) => i.kind === 'curve' && i.pair === this.pairKey && i.visible && i.points.length > 1) ?? null; }
-  get curve() { return this.curveItem?.points ?? []; }
+  // what the 3D view draws, from ALL diagrams:
+  get surfaceRects() { return this.items.filter((i) => i.kind === 'rect' && i.visible && i.style !== 'volume'); }   // boundary surfaces
+  volumeRectsOf(pair) { return this.items.filter((i) => i.kind === 'rect' && i.pair === pair && i.visible && i.style !== 'surface'); }  // translucent volumes
+  get curves() { return this.items.filter((i) => i.kind === 'curve' && i.visible && i.points.length > 1); }
 
   nextColor() {
     const used = (c) => this.items.filter((i) => i.color.join() === c.join()).length;  // by value: loaded colours are copies
@@ -434,10 +435,10 @@ export class TSPanel {
     this.drawLegend();
   }
 
-  // 256x256 RGBA texture data for the region transfer function (rectangles drawn as volumes) of the active pair
-  regionTF(size = 256) {
+  // 256x256 RGBA texture data for the region transfer function of one diagram (its rectangles drawn as volumes)
+  regionTF(pair, size = 256) {
     const data = new Uint8Array(size * size * 4);
-    for (const r of this.volumeRects) {
+    for (const r of this.volumeRectsOf(pair)) {
       const sa = Math.floor(r.s0 * size), sb = Math.ceil(r.s1 * size);
       const ta = Math.floor(r.t0 * size), tb = Math.ceil(r.t1 * size);
       for (let ty = ta; ty < tb && ty < size; ty++)

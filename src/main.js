@@ -1,8 +1,8 @@
 import './simple.css';
 import './style.css';
-import { VERT, FRAG, MAX_CURVE, MAX_RECTS } from './shaders.js';
-import { TSPanel, buildHists, PAIRS } from './ts.js';
-import { themeColors, CURVE_RGB } from './theme.js';
+import { VERT, FRAG, MAX_CURVE, MAX_CURVES, MAX_RECTS } from './shaders.js';
+import { TSPanel, buildHists, PAIRS, PAIR_KEYS } from './ts.js';
+import { themeColors } from './theme.js';
 
 import { openData } from './data.js';
 import { colormapTable, mapName, CHOICES } from './colormaps.js';
@@ -111,17 +111,18 @@ function updateColormap() {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, colormapTable(name));
 }
 
-const tf2 = tex(gl.TEXTURE_2D, 3, () => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 256, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(256 * 256 * 4)));
+// region transfer function: one 256 x 256 layer per diagram (rectangles drawn as volumes); nearest filtering = sharp edges
+const tf2 = tex(gl.TEXTURE_2D_ARRAY, 3, () => {
+  gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, 256, 256, PAIR_KEYS.length);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+});
 
-// sharp rectangle edges in the T-S transfer function
-gl.activeTexture(gl.TEXTURE3);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
-// signed distance to the T-S curve, recomputed when the curve changes
+// signed distance to each curve in its diagram: one 512 x 512 layer per curve slot, recomputed when the curve in a slot changes
 const SDF = 512;
-const sdfTex = tex(gl.TEXTURE_2D, 4, () => gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RG16F, SDF, SDF));
-let sdfKey = '';
+const sdfTex = tex(gl.TEXTURE_2D_ARRAY, 4, () => gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RG16F, SDF, SDF, MAX_CURVES));
+const sdfKeys = Array(MAX_CURVES).fill('');   // which curve (points as JSON) each layer currently holds
+const sdfCache = new Map();                    // recently computed distance fields, so slots can be reshuffled cheaply
 function curveSDF(curve) {
   const out = new Float32Array(SDF * SDF * 2);
   for (let y = 0; y < SDF; y++)
@@ -142,7 +143,6 @@ function curveSDF(curve) {
 }
 
 gl.uniform1i(U.uVol, 0); gl.uniform1i(U.uVolB, 5); gl.uniform1i(U.uTF1, 2); gl.uniform1i(U.uTF2, 3); gl.uniform1i(U.uSDF, 4);
-gl.uniform3fv(U.uFiberColor, CURVE_RGB.map((c) => c / 255));
 gl.uniform1f(U.uBand, 0.01);
 
 // ---------- camera ----------
@@ -236,29 +236,50 @@ const panel = new TSPanel($('ts'), { fields: meta.fields, names: meta.names, uni
 panel.setHists(cur.hists[0], cur.histMax);
 
 function uploadSelection() {
+  // rectangles drawn as volumes: one region transfer function layer per diagram
   gl.activeTexture(gl.TEXTURE3);
-  gl.bindTexture(gl.TEXTURE_2D, tf2);
-  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, panel.regionTF());
-  const n = Math.min(panel.curve.length, MAX_CURVE);
-  const key = JSON.stringify(panel.curve);
-  if (n > 1 && key !== sdfKey) {
-    gl.activeTexture(gl.TEXTURE4);
-    gl.bindTexture(gl.TEXTURE_2D, sdfTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SDF, SDF, gl.RG, gl.FLOAT, curveSDF(panel.curve.slice(0, n)));
-    sdfKey = key;
-  }
-  gl.uniform2i(U.uPair, panel.pair.x, panel.pair.y);
-  gl.uniform3fv(U.uFiberColor, (panel.curveItem?.color ?? CURVE_RGB).map((c) => c / 255));
-  gl.uniform1i(U.uNCurve, n);
-  gl.uniform1i(U.uFill, panel.volumeRects.length ? 1 : 0);  // rectangles drawn as volumes
-  const rects = panel.surfaceRects.slice(0, MAX_RECTS);   // rectangles drawn as surfaces
-  const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tf2);
+  let fillMask = 0;
+  PAIR_KEYS.forEach((key, i) => {
+    if (!panel.volumeRectsOf(key).length) return;
+    fillMask |= 1 << i;
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, 256, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, panel.regionTF(key));
+  });
+  gl.uniform1i(U.uFillMask, fillMask);
+
+  // curves (all diagrams): layer i of the distance texture holds the i-th visible curve
+  const curves = panel.curves.slice(0, MAX_CURVES);
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, sdfTex);
+  const curveCol = new Float32Array(MAX_CURVES * 3), curvePair = new Int32Array(MAX_CURVES);
+  curves.forEach((c, i) => {
+    const pts = c.points.slice(0, MAX_CURVE), key = JSON.stringify(pts);
+    if (sdfKeys[i] !== key) {
+      if (!sdfCache.has(key)) {
+        if (sdfCache.size >= 8) sdfCache.delete(sdfCache.keys().next().value);
+        sdfCache.set(key, curveSDF(pts));
+      }
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, SDF, SDF, 1, gl.RG, gl.FLOAT, sdfCache.get(key));
+      sdfKeys[i] = key;
+    }
+    curveCol.set(c.color.map((v) => v / 255), i * 3);
+    curvePair[i] = PAIRS[c.pair].index;
+  });
+  gl.uniform1i(U.uNCurve, curves.length);
+  gl.uniform3fv(U.uCurveColor, curveCol);
+  gl.uniform1iv(U.uCurvePair, curvePair);
+
+  // rectangles drawn as surfaces (all diagrams)
+  const rects = panel.surfaceRects.slice(0, MAX_RECTS);
+  const box = new Float32Array(MAX_RECTS * 4), col = new Float32Array(MAX_RECTS * 3), rectPair = new Int32Array(MAX_RECTS);
   rects.forEach((r, i) => {
     box.set([(r.s0 + r.s1) / 2, (r.t0 + r.t1) / 2, (r.s1 - r.s0) / 2, (r.t1 - r.t0) / 2], i * 4);
     col.set(r.color.map((c) => c / 255), i * 3);
+    rectPair[i] = PAIRS[r.pair].index;
   });
   gl.uniform4fv(U.uRect, box);
   gl.uniform3fv(U.uRectColor, col);
+  gl.uniform1iv(U.uRectPair, rectPair);
   gl.uniform1i(U.uNRect, rects.length);
 }
 
