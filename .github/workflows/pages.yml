@@ -1,0 +1,81 @@
+name: Build and deploy to GitHub Pages
+
+# Builds the app and the WOA23 data on GitHub and publishes the result as a static site, so users only open a link.
+# - push to main: build + deploy
+# - push to the working branch / manual run: build only (checks that everything still builds; no deployment)
+on:
+  push:
+    branches: [main, claude/amazing-tesla-1jshar]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The data (about 162 MB gzipped) is generated from the public NOAA files, not stored in git.
+      # It is cached until the data scripts change, so most deployments skip the 1.5 GB download.
+      - name: Restore data cache
+        id: data
+        uses: actions/cache@v4
+        with:
+          path: public/data/woa23
+          key: woa23-gz-${{ hashFiles('tools/download.py', 'tools/prep.py') }}
+
+      - name: Download and prepare the WOA23 data
+        if: steps.data.outputs.cache-hit != 'true'
+        run: |
+          pip install numpy scipy netCDF4
+          python tools/download.py data/raw
+          python tools/prep.py data/raw public/data/woa23 --gzip
+
+      # the old annual files in public/data/ are only a fallback for local development
+      - name: Leave the legacy data out of the site
+        run: rm -f public/data/t.bin public/data/s.bin public/data/mask.bin public/data/meta.json
+
+      - name: Install and build the app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check the build output
+        run: |
+          test -f dist/data/woa23/meta.json
+          test -f dist/data/woa23/annual/00.bin.gz
+          test -f dist/data/woa23/monthly/12.bin.gz
+          du -sh dist
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
