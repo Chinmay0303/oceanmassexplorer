@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false   # a newer push waits for the running build / deployment instead of cancelling it
 
 jobs:
   build:
