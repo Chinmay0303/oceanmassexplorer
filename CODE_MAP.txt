@@ -24,6 +24,7 @@ Rendering = one full-screen triangle + one fragment shader that ray-marches 3D t
  src/colormaps.js (23)    colour-map helpers; src/colormap-stops.js (9, GENERATED)           -> Part 11
  src/legend.js (40)       1D colour bar                                                      -> Part 11
  tools/download.py, tools/prep.py, tools/gen_colormaps.py                                    -> Parts 1, 11
+ .github/workflows/pages.yml  GitHub Pages build + deploy (builds the data and the app on GitHub)    -> Part 1.5
  public/data/woa23/       generated data (.bin git-ignored, meta.json committed); public/data/{t,s,mask}.bin legacy annual files
  README.md (setup, usage), log.md (decisions, timeline, status), ROADMAP.txt (planned work), CODE_MAP.txt (this)
 
@@ -34,10 +35,14 @@ Rendering = one full-screen triangle + one fragment shader that ray-marches 3D t
  1.2 tools/prep.py           reads t_an / s_an / o_an; global value range per field over all files; fills land / below-seafloor / missing
                              cells with the nearest valid value (per field); writes uint16 planar [field][depth][lat][lon] plus a mask.
      read() L43, fill_nearest() L50, quantise() L55, main() L59: pass 1 = checks + ranges, pass 2 = writes.
+ 1.2b prep.py --gzip (also: retries in download.py): every .bin / .mask.bin written as .gz, meta.compression = "gzip" (162 MB instead of 341 MB).
  1.3 Output public/data/woa23/: meta.json (grid, depth axes, ranges, datasets, step labels, stats), annual/00.bin + .mask.bin,
      monthly/01..12.bin + .mask.bin. Annual = 102 levels (0-5500 m), monthly = 57 levels (0-1500 m, the first 57 annual levels).
      mask bit0 = ocean (T and S valid), bit1 = oxygen valid.
  1.4 tools/gen_colormaps.py  samples cmocean / matplotlib maps into src/colormap-stops.js (see Part 11).
+ 1.5 .github/workflows/pages.yml   job build: checkout, Node 22 + Python 3.12, data cache (key = hash of download.py + prep.py), download + prep --gzip when
+                             the cache misses, delete the legacy data files, npm ci + npm run build, check dist/data/woa23, upload dist as the Pages artifact.
+                             job deploy: only on main, publishes the artifact (environment github-pages). Pushes to the working branch only build.
  Contract: values are u / 65535 over meta.ranges[field] (T -3..36, S 4..44, O2 0..722).
 
 ---------------------------------------------------------------------------------
@@ -45,7 +50,8 @@ Rendering = one full-screen triangle + one fragment shader that ray-marches 3D t
 ---------------------------------------------------------------------------------
  2.1 openData()  L48     data location, first match: ?data=<url> -> VITE_DATA_URL -> data/woa23/ -> legacy data/ (old annual T/S).
  2.2 fromWoa23() / fromLegacy()  L28-L46   normalise meta (fields, names, units, ranges, datasets, stepLabels, lon/lat grid, dlon).
- 2.3 loadStep(dataset, step)  inside openData    fetches <step>.bin + <step>.mask.bin, checks byte sizes, splits planes t/s/o;
+ 2.3 loadStep(dataset, step)  inside openData    fetches <step>.bin[.gz] + <step>.mask.bin[.gz] (getBytes() unpacks gzip with DecompressionStream when
+     meta.compression is "gzip"), checks byte sizes, splits planes t/s/o;
      single-step datasets are cached, multi-step ones are not (they live on the GPU, see 4.4).
 
 ---------------------------------------------------------------------------------
