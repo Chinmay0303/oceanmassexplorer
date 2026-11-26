@@ -1,6 +1,7 @@
 """WOA23 1-degree NetCDF (t, s, o; annual + monthly) -> raw binaries for the browser.
 
-Usage: python tools/prep.py [raw_dir] [out_dir]     (defaults: data/raw  public/data/woa23)
+Usage: python tools/prep.py [raw_dir] [out_dir] [--gzip]     (defaults: data/raw  public/data/woa23)
+--gzip writes every .bin / .mask.bin as .gz (about half the size, used for the GitHub Pages build; the app unpacks them in the browser).
 Get the inputs first with: python tools/download.py data/raw
 
 Input : woa23_decav71A0_{t,s,o}{tp}_01.nc, tp = 00 (annual) and 01..12 (months); variables t_an, s_an, o_an.
@@ -17,6 +18,7 @@ Design (see log.md):
    linear filtering does not bleed junk; the mask tells the renderer which cells are real;
  * monthly levels must equal the first 57 annual levels (checked), so one depth axis serves both.
 """
+import gzip
 import json
 import sys
 from pathlib import Path
@@ -56,7 +58,16 @@ def quantise(a, lo, hi):
     return np.clip((a - lo) / (hi - lo) * 65535 + 0.5, 0, 65535).astype("<u2")
 
 
-def main(raw="data/raw", out="public/data/woa23"):
+def write(path, data, gz):
+    """data: bytes; with gz the file gets a .gz suffix"""
+    if gz:
+        with gzip.GzipFile(f"{path}.gz", "wb", compresslevel=9, mtime=0) as f:
+            f.write(data)
+    else:
+        Path(path).write_bytes(data)
+
+
+def main(raw="data/raw", out="public/data/woa23", gz=False):
     out = Path(out)
     missing = [str(path(raw, f, tp)) for d in DATASETS.values() for tp in d["steps"] for f in FIELDS if not path(raw, f, tp).exists()]
     if missing:
@@ -98,8 +109,8 @@ def main(raw="data/raw", out="public/data/woa23"):
             for f in FIELDS:
                 valid = o_ok if f == "o" else ocean
                 planes.append(quantise(fill_nearest(arrs[f], valid), *rng[f]))
-            np.concatenate([p.ravel() for p in planes]).tofile(out / name / f"{tp}.bin")
-            (ocean.astype("u1") | (o_ok.astype("u1") << 1)).tofile(out / name / f"{tp}.mask.bin")
+            write(out / name / f"{tp}.bin", np.concatenate([p.ravel() for p in planes]).tobytes(), gz)
+            write(out / name / f"{tp}.mask.bin", (ocean.astype("u1") | (o_ok.astype("u1") << 1)).tobytes(), gz)
             stats.append(dict(step=tp, ocean=round(float(ocean.mean()), 4), o2_of_ocean=round(float(o_ok.sum() / ocean.sum()), 4)))
             print(name, tp, "ocean %.3f  oxygen coverage of ocean %.3f" % (stats[-1]["ocean"], stats[-1]["o2_of_ocean"]))
         meta_ds[name] = dict(
@@ -113,11 +124,12 @@ def main(raw="data/raw", out="public/data/woa23"):
         lat0=float(lat[0]), dlat=float(lat[1] - lat[0]), lon0=float(lon[0]), dlon=float(lon[1] - lon[0]),
         fields=FIELDS, field_names=["Temperature", "Salinity", "Dissolved oxygen"], ranges=rng,
         layout="uint16 planar [field][depth][lat][lon], lon fastest; mask uint8 [depth][lat][lon] bit0 ocean bit1 oxygen valid",
-        datasets=meta_ds,
+        datasets=meta_ds, compression="gzip" if gz else None,
     )
     (out / "meta.json").write_text(json.dumps(meta))
     print("wrote", out)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    main(*args[:2], gz="--gzip" in sys.argv)
