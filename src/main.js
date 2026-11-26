@@ -11,7 +11,7 @@ import { renderSelections } from './selections-ui.js';
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
-const HELP = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · double-click: reset';
+const HELP = 'Drag: rotate · right/Shift-drag: pan · scroll: zoom to cursor · WASD/arrows, R/F, Q/E: move · click: pick a point · Home: reset view';
 
 // ---------- data ----------
 let data;
@@ -147,7 +147,7 @@ gl.uniform1f(U.uBand, 0.01);
 
 // ---------- camera ----------
 // Orbit camera around `target`. Left drag orbits; right/middle/Shift drag pans; wheel zooms to the cursor;
-// WASD/arrows move, R/F up/down, Q/E zoom; double-click resets.
+// WASD/arrows move, R/F up/down, Q/E zoom; the Reset button or Home resets.
 const TAN = Math.tan(0.4);
 const HOME = { az: 0.4, el: 0.7, dist: 3.2, target: [0, 0, 0] };
 const cam = structuredClone(HOME);
@@ -171,6 +171,8 @@ function pan(dx, dy) { // dx, dy in focus-plane world units along right / up
   clampTarget();
 }
 
+// reset: the Reset view button or the Home key (no double-click: two quick picks would reset the camera)
+const resetView = () => { Object.assign(cam, structuredClone(HOME)); interact(); };
 let drag = null, downAt = null;
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
@@ -197,7 +199,6 @@ canvas.addEventListener('pointerup', (e) => {
   downAt = null; drag = null; canvas.style.cursor = 'grab';
   if (click) pickAt(e.clientX, e.clientY);
 });
-canvas.addEventListener('dblclick', () => { Object.assign(cam, structuredClone(HOME)); interact(); });
 
 // zoom by `k` (< 1 zooms in), keeping the point under the cursor (ndc x, y) fixed
 function zoom(k, x = 0, y = 0) {
@@ -438,7 +439,7 @@ $('save').onclick = () => {
   URL.revokeObjectURL(a.href);
 };
 $('load').onclick = () => $('file').click();
-$('reset').onclick = () => { Object.assign(cam, structuredClone(HOME)); interact(); };
+$('reset').onclick = resetView;
 // selections as a flat list; older configs had rects/curve (T-S only) or one {rects, curve} set per diagram
 function migrateSelections(s) {
   if (Array.isArray(s.selections)) return s.selections;
@@ -607,7 +608,10 @@ function updatePin() {
   pin.style.left = `${((xn + 1) / 2) * canvas.clientWidth}px`;
   pin.style.top = `${((1 - yn) / 2) * canvas.clientHeight}px`;
 }
-addEventListener('keydown', (e) => { if (e.key === 'Escape') clearProbe(); });
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') clearProbe();
+  if (e.key === 'Home' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) resetView();
+});
 
 // canvases follow the page theme (light / dark)
 function applyTheme() {
@@ -621,11 +625,8 @@ function applyTheme() {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyTheme(); applyControls(); });
 applyTheme();
 
-// starting selection: warm salty box plus a thermocline-like curve
-panel.setSelections([
-  { kind: 'rect', pair: 'ts', s0: 0.8, s1: 1, t0: 0.55, t1: 1 },
-  { kind: 'curve', pair: 'ts', points: [[0.8, 0.15], [0.84, 0.4], [0.88, 0.7]] },
-]);
+// start with no selections (this also sends the empty selection state to the shader and draws the empty list)
+panel.setSelections([]);
 applyControls();
 if (cur.ds.steps.length > 1) preloadRest(loadToken); else status.textContent = HELP;
 render(performance.now());

@@ -8,10 +8,11 @@ Files fetched (3 variables x 13 periods = 39 files, each holds ALL statistic fie
 Span decav71A0 = 1971-2000 climate normal: the only span for which temperature, salinity AND oxygen exist
 (see log.md, decision D2).
 
-The URL layout below follows the WOA directory convention (variable/netcdf/span/grid) and is NOT yet verified
-against the live server; change BASE / URL if NCEI answers 404. Existing files are skipped, so it can be re-run.
+The URL layout (variable/netcdf/span/grid) was verified against the live NCEI server on 2026-11-25; change BASE / url()
+if NCEI answers 404 one day. Existing files are skipped and failed downloads are retried, so it can be re-run.
 """
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -40,12 +41,17 @@ def main(raw="data/raw"):
                 print("have", dst.name)
                 continue
             print("get ", url(v, tp))
-            try:
-                tmp = dst.with_suffix(".part")
-                urllib.request.urlretrieve(url(v, tp), tmp)
-                tmp.rename(dst)
-            except urllib.error.URLError as e:
-                sys.exit(f"download failed for {url(v, tp)}: {e}")
+            tmp = dst.with_suffix(".part")
+            for attempt in range(1, 5):  # NCEI sometimes drops connections; retry with a growing pause
+                try:
+                    urllib.request.urlretrieve(url(v, tp), tmp)
+                    tmp.rename(dst)
+                    break
+                except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+                    if attempt == 4:
+                        sys.exit(f"download failed for {url(v, tp)}: {e}")
+                    print(f"  attempt {attempt} failed ({e}); retrying")
+                    time.sleep(5 * attempt)
 
 
 if __name__ == "__main__":
